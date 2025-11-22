@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Tuple
+
+# Allow running directly without installing the package (python main.py)
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from trace_agent import AgentConfig, TraceAgent, build_qwen_vllm_chat_model
 from trace_agent.memory import PlanStep, StepResult
