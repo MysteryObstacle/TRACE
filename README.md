@@ -48,6 +48,17 @@ Run the canned-response example to see the PLAN + ReAct trace without hitting an
 python examples/offline_demo.py
 ```
 
+### Pushing this code to GitHub
+
+If you want to see the latest code on GitHub, add your remote and push the current branch (default is `work`):
+
+```bash
+git remote add origin https://github.com/<your_org_or_user>/TRACE.git
+git push -u origin work
+```
+
+If a remote already exists, simply run `git push` to publish updates.
+
 ## Architecture
 
 - `trace_agent.agent.TraceAgent` orchestrates initialization, PLAN step execution, and context tracking.

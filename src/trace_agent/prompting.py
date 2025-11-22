@@ -63,6 +63,7 @@ def build_react_prompt(step: PlanStep, tools: Iterable[str]) -> ChatPromptTempla
                     Think: 你的推理过程
                     Action: 调用的工具或操作，如果无需调用工具请写"N/A"
                     Observe: 根据Action得到的结果或基于思考的结论
+                    当你认为当前计划步骤的目标已经达成，请在Observe开头添加"[FINISHED]"并给出简要结论；否则继续推进该步骤。
                     """
                 ),
             ),

@@ -14,6 +14,7 @@ from .tools import Toolset
 class AgentConfig:
     auto_execute: bool = True
     default_tools: Optional[Toolset] = None
+    max_react_turns: int = 7
 
 
 class TraceAgent:
@@ -62,26 +63,36 @@ class TraceAgent:
         self.initialize_state(topo_state)
         self.derive_goal(user_intent)
         if not self.is_scene_construction_goal():
-            summary = (
-                "Think: 用户目标不需要SceneGraph代码\n"
-                "Action: N/A\n"
-                "Observe: 任务结束"
-            )
-            result = self._parse_react_blocks(summary)
-            self.state.record_step(PlanStep.UNDERSTAND_INTENT, result)
+            self._run_generic_react(user_intent)
             return self.state.plan_context
 
         for step in self.generate_plan():
             self.state.set_current_step(step)
-            step_result = self._run_react_step(step, user_intent)
-            self.state.record_step(step, step_result)
+            for _ in range(self.config.max_react_turns):
+                step_result = self._run_react_turn(step, user_intent)
+                self.state.record_step(step, step_result)
+                if self._step_is_complete(step_result):
+                    break
         return self.state.plan_context
 
-    def _run_react_step(self, step: PlanStep, user_intent: str) -> StepResult:
+    def _run_generic_react(self, user_intent: str) -> list[StepResult]:
+        """Run a ReAct loop for non-scene tasks without recording plan context."""
+
+        results: list[StepResult] = []
+        for _ in range(self.config.max_react_turns):
+            result = self._run_react_turn(PlanStep.UNDERSTAND_INTENT, user_intent, extra_history=results)
+            results.append(result)
+            if self._step_is_complete(result):
+                break
+        return results
+
+    def _run_react_turn(
+        self, step: PlanStep, user_intent: str, extra_history: Optional[list[StepResult]] = None
+    ) -> StepResult:
         prompt = build_react_prompt(step, self.tools.tool_names())
         prompt_to_send = prompt.invoke(
             {
-                "context": self._context_snippet(),
+                "context": self._context_snippet(extra_history),
                 "user_intent": user_intent,
                 "topo_summary": self.state.topo_json.get("summary", "(空拓扑)"),
             }
@@ -90,11 +101,14 @@ class TraceAgent:
         content = response.content if hasattr(response, "content") else str(response)
         return self._parse_react_blocks(content)
 
-    def _context_snippet(self) -> str:
+    def _context_snippet(self, extra_history: Optional[list[StepResult]] = None) -> str:
         parts: list[str] = []
         for step, results in self.state.plan_context.steps.items():
             for idx, result in enumerate(results, start=1):
                 parts.append(f"{step.label} #{idx}: {result.observe}")
+        if extra_history:
+            for idx, result in enumerate(extra_history, start=1):
+                parts.append(f"当前步骤上下文 #{idx}: {result.observe}")
         return "\n".join(parts) if parts else "(无历史上下文)"
 
     def _parse_react_blocks(self, content: str) -> StepResult:
@@ -109,6 +123,11 @@ class TraceAgent:
         if not think:
             think = content.strip()
         return StepResult(think=think, action=action or "N/A", observe=observe or content.strip(), output=None)
+
+    def _step_is_complete(self, result: StepResult) -> bool:
+        text = f"{result.action} {result.observe}".lower()
+        completion_markers = ["[finished]", "完成", "结束", "done", "完成本步骤", "已完成", "达成"]
+        return any(marker.lower() in text for marker in completion_markers)
 
     def plan_outline(self) -> str:
         steps = [step.label for step in self.generate_plan()]
