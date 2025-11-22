@@ -1,0 +1,17 @@
+[project]
+name = "trace-agent"
+version = "0.1.0"
+description = "Topology-Reasoning Agent orchestrator"
+authors = [{name = "TRACE"}]
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=0.2.11",
+    "langchain-community>=0.2.10",
+    "langchain-core>=0.2.23",
+    "langgraph>=0.2.3",
+    "pydantic>=2.8.0"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
