@@ -35,7 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TRACE agent demo with streaming and approvals")
     parser.add_argument("intent", help="用户意图描述")
     parser.add_argument("--topo-summary", default="(空拓扑)", help="当前拓扑摘要")
-    parser.add_argument("--base-url", default="http://localhost:8000/v1", help="LLM服务地址，包含/v1前缀")
+    parser.add_argument(
+        "--base-url",
+        default="http://10.10.5.8:9000/v1",
+        help="LLM服务地址，建议保留/v1前缀（会自动去掉/chat/completions结尾）",
+    )
     parser.add_argument("--api-key", default="EMPTY", help="LLM API密钥，如vLLM可忽略")
     parser.add_argument("--model", default="Qwen3-8B", help="模型名称")
     parser.add_argument("--manual", action="store_true", help="关闭auto_execute，需人工确认每个step")

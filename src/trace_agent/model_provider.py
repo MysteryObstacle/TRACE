@@ -20,8 +20,12 @@ def build_qwen_vllm_chat_model(
     into LangChain's graph or agent tooling without additional adapters.
     """
 
+    normalized_base = base_url.rstrip("/")
+    if normalized_base.endswith("/chat/completions"):
+        normalized_base = normalized_base[: -len("/chat/completions")]
+
     return ChatOpenAI(
-        openai_api_base=base_url,
+        openai_api_base=normalized_base,
         openai_api_key=api_key,
         model=model,
         streaming=kwargs.get("streaming", False),

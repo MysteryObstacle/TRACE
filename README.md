@@ -53,6 +53,8 @@ python main.py "我想要构建一个工业控制网络的靶场场景" \
   --manual
 ```
 
+> 提示：如果你的服务地址提供的是 `.../v1/chat/completions`，`build_qwen_vllm_chat_model` 会自动去掉尾部的 `/chat/completions`，因此 `--base-url` 保持到 `/v1` 即可。
+
 Flags:
 
 - `--manual` sets `auto_execute=False` and prompts for confirmation after each ReAct回合，可修改 Think 后继续。
