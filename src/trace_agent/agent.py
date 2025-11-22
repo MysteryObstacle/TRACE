@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, replace
+from typing import Callable, Optional, Tuple
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -15,6 +15,9 @@ class AgentConfig:
     auto_execute: bool = True
     default_tools: Optional[Toolset] = None
     max_react_turns: int = 7
+    stream: bool = False
+    stream_handler: Optional[Callable[[str], None]] = None
+    approval_callback: Optional[Callable[[PlanStep, StepResult], Tuple[bool, Optional[str]]]] = None
 
 
 class TraceAgent:
@@ -70,8 +73,10 @@ class TraceAgent:
             self.state.set_current_step(step)
             for _ in range(self.config.max_react_turns):
                 step_result = self._run_react_turn(step, user_intent)
-                self.state.record_step(step, step_result)
-                if self._step_is_complete(step_result):
+                step_result, should_continue = self._confirm_step(step, step_result)
+                if should_continue:
+                    self.state.record_step(step, step_result)
+                if not should_continue or self._step_is_complete(step_result):
                     break
         return self.state.plan_context
 
@@ -80,9 +85,13 @@ class TraceAgent:
 
         results: list[StepResult] = []
         for _ in range(self.config.max_react_turns):
-            result = self._run_react_turn(PlanStep.UNDERSTAND_INTENT, user_intent, extra_history=results)
-            results.append(result)
-            if self._step_is_complete(result):
+            result = self._run_react_turn(
+                PlanStep.UNDERSTAND_INTENT, user_intent, extra_history=results
+            )
+            result, should_continue = self._confirm_step(PlanStep.UNDERSTAND_INTENT, result)
+            if should_continue:
+                results.append(result)
+            if not should_continue or self._step_is_complete(result):
                 break
         return results
 
@@ -97,9 +106,27 @@ class TraceAgent:
                 "topo_summary": self.state.topo_json.get("summary", "(空拓扑)"),
             }
         )
-        response = self.llm.invoke(prompt_to_send)
-        content = response.content if hasattr(response, "content") else str(response)
+        content = self._generate_response(prompt_to_send)
         return self._parse_react_blocks(content)
+
+    def _generate_response(self, prompt) -> str:
+        if self.config.stream and hasattr(self.llm, "stream"):
+            chunks: list[str] = []
+            for chunk in self.llm.stream(prompt):
+                piece = getattr(chunk, "content", None)
+                if piece is None and hasattr(chunk, "message"):
+                    piece = getattr(chunk.message, "content", "")
+                piece = piece or ""
+                if self.config.stream_handler and piece:
+                    self.config.stream_handler(piece)
+                chunks.append(piece)
+            return "".join(chunks)
+
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, "content") else str(response)
+        if self.config.stream and self.config.stream_handler:
+            self.config.stream_handler(content)
+        return content
 
     def _context_snippet(self, extra_history: Optional[list[StepResult]] = None) -> str:
         parts: list[str] = []
@@ -123,6 +150,17 @@ class TraceAgent:
         if not think:
             think = content.strip()
         return StepResult(think=think, action=action or "N/A", observe=observe or content.strip(), output=None)
+
+    def _confirm_step(self, step: PlanStep, result: StepResult) -> Tuple[StepResult, bool]:
+        if self.config.auto_execute:
+            return result, True
+        if not self.config.approval_callback:
+            raise ValueError("auto_execute=False requires an approval_callback to continue")
+
+        proceed, edited_think = self.config.approval_callback(step, result)
+        if edited_think:
+            result = replace(result, think=edited_think)
+        return result, bool(proceed)
 
     def _step_is_complete(self, result: StepResult) -> bool:
         text = f"{result.action} {result.observe}".lower()

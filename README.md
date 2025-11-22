@@ -40,6 +40,24 @@ for step, results in plan.steps.items():
         print(step.label, result.think, result.action, result.observe)
 ```
 
+### Streaming + manual approvals demo (`main.py`)
+
+Use the interactive demo to see streaming outputs and per-step confirmation. Disable auto execute with `--manual` to edit `Think` content before continuing:
+
+```bash
+python main.py "我想要构建一个工业控制网络的靶场场景" \
+  --base-url http://10.10.5.8:9000/v1 \
+  --api-key EMPTY \
+  --model Qwen3-8B \
+  --topo-summary "当前拓扑：空白" \
+  --manual
+```
+
+Flags:
+
+- `--manual` sets `auto_execute=False` and prompts for confirmation after each ReAct回合，可修改 Think 后继续。
+- `--no-stream` turns off streaming; by default tokens are printed as they arrive.
+
 ### Offline deterministic demo
 
 Run the canned-response example to see the PLAN + ReAct trace without hitting an LLM endpoint:
