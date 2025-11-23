@@ -111,6 +111,20 @@ class Toolset:
     def prime_images(self, catalog: List[str]) -> None:
         self.image_catalog.responses["default"] = ", ".join(catalog)
 
+    def prime_plan_context(
+        self, context: str, *, user_intent: Optional[str] = None, overall_goal: Optional[str] = None
+    ) -> None:
+        """Expose最新PLAN上下文给查询工具，便于LLM跨步检索。"""
+
+        parts: List[str] = []
+        if user_intent:
+            parts.append(f"用户意图: {user_intent}")
+        if overall_goal:
+            parts.append(f"总体目标: {overall_goal}")
+        if context:
+            parts.append("历史上下文:\n" + context)
+        self.plan_context_query.responses["default"] = "\n".join(parts) or "(无PLAN上下文)"
+
 
 DEMO_TOPO_JSON = dedent(
     """

@@ -98,10 +98,14 @@ class TraceAgent:
     def _run_react_turn(
         self, step: PlanStep, user_intent: str, extra_history: Optional[list[StepResult]] = None
     ) -> StepResult:
+        context_text = self._context_snippet(extra_history)
+        self.tools.prime_plan_context(
+            context_text, user_intent=user_intent, overall_goal=self.state.overall_goal
+        )
         prompt = build_react_prompt(step, self.tools.tool_names())
         prompt_to_send = prompt.invoke(
             {
-                "context": self._context_snippet(extra_history),
+                "context": context_text,
                 "user_intent": user_intent,
                 "topo_summary": self.state.topo_json.get("summary", "(空拓扑)"),
             }
@@ -130,6 +134,8 @@ class TraceAgent:
 
     def _context_snippet(self, extra_history: Optional[list[StepResult]] = None) -> str:
         parts: list[str] = []
+        if self.state.overall_goal:
+            parts.append(f"总体目标: {self.state.overall_goal}")
         for step, results in self.state.plan_context.steps.items():
             for idx, result in enumerate(results, start=1):
                 parts.append(f"{step.label} #{idx}: {result.observe}")
