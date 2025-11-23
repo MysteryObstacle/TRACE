@@ -172,6 +172,10 @@ class TraceAgent:
                     if visible:
                         self.config.stream_handler(visible)
                 chunks.append(piece)
+            # Ensure there is a newline separating streamed model output from subsequent
+            # progress logs so step boundaries remain readable in the console.
+            if self.config.stream_handler:
+                self.config.stream_handler("\n")
             return "".join(chunks)
 
         response = self.llm.invoke(prompt)
