@@ -84,7 +84,7 @@ If a remote already exists, simply run `git push` to publish updates.
 - `trace_agent.agent.TraceAgent` orchestrates initialization, PLAN step execution, and context tracking.
 - `trace_agent.memory` stores plan metadata, ConversationState, and handles JSON persistence for Step 5.
 - `trace_agent.prompting` contains the system primer plus prompts for goal extraction、任务分类、每步ReAct提示。
-- `trace_agent.tools.Toolset` exposes the required查询工具（拓扑摘要/详情、SceneGraph API与类型、镜像信息），支持以缓存形式预热。
+- `trace_agent.tools.Toolset` 提供内置“静态工具”而非 `langchain.tools`：PLAN上下文查询、旧/目标Topo JSON与diff规划、SceneGraph SDK摘录、镜像清单、行业知识（普渡模型等）、Topo规范、SceneGraph代码规范。
 - `trace_agent.model_provider.build_qwen_vllm_chat_model` builds a ChatOpenAI-compatible client pointing to vLLM + Qwen3。
 - `examples/offline_demo.py` demonstrates the full loop with a deterministic chat model for testing.
 

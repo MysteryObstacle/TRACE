@@ -3,6 +3,7 @@
 from .agent import AgentConfig, TraceAgent
 from .memory import ConversationState, PlanStep, PlanContext, StepResult
 from .model_provider import build_qwen_vllm_chat_model
+from .tools import Toolset
 
 __all__ = [
     "TraceAgent",
@@ -12,4 +13,5 @@ __all__ = [
     "PlanContext",
     "StepResult",
     "build_qwen_vllm_chat_model",
+    "Toolset",
 ]

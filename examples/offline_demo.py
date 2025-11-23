@@ -6,7 +6,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from ..src.trace_agent import TraceAgent
+from trace_agent import TraceAgent
 
 
 class StaticChatModel(BaseChatModel):
