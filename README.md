@@ -29,9 +29,9 @@ pip install -e .
 from trace_agent import TraceAgent, build_qwen_vllm_chat_model
 
 llm = build_qwen_vllm_chat_model(
-    base_url="http://10.10.5.8:9000/v1",
+    base_url="http://localhost:8000/v1",
     api_key="EMPTY",
-    model="Qwen3-8B",
+    model="Qwen3-1.5B-Instruct",
 )
 agent = TraceAgent(llm)
 plan = agent.run_plan("在VPC中创建三层应用拓扑", topo_state={"summary": "空白集群"})
