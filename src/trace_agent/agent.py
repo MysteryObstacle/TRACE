@@ -17,7 +17,45 @@ class AgentConfig:
     max_react_turns: int = 7
     stream: bool = False
     stream_handler: Optional[Callable[[str], None]] = None
+    progress_callback: Optional[Callable[[str], None]] = None
     approval_callback: Optional[Callable[[PlanStep, StepResult], Tuple[bool, Optional[str]]]] = None
+
+
+class _ThinkStreamFilter:
+    """Filter that suppresses <think>...</think> spans when streaming tokens."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._suppress = False
+
+    def feed(self, chunk: str) -> str:
+        self._buffer += chunk
+        visible_parts: list[str] = []
+
+        while self._buffer:
+            if self._suppress:
+                end = self._buffer.find("</think>")
+                if end == -1:
+                    # Still inside a <think> block, drop everything so far.
+                    self._buffer = ""
+                    return "".join(visible_parts)
+                self._buffer = self._buffer[end + len("</think>") :]
+                self._suppress = False
+                continue
+
+            start = self._buffer.find("<think>")
+            if start == -1:
+                visible_parts.append(self._buffer)
+                self._buffer = ""
+                break
+
+            if start > 0:
+                visible_parts.append(self._buffer[:start])
+
+            self._buffer = self._buffer[start + len("<think>") :]
+            self._suppress = True
+
+        return "".join(visible_parts)
 
 
 class TraceAgent:
@@ -28,6 +66,7 @@ class TraceAgent:
         self.config = config or AgentConfig()
         self.state = ConversationState()
         self.tools = self.config.default_tools or Toolset()
+        self._stream_filter = _ThinkStreamFilter()
 
     def initialize_state(self, topo_state: Optional[dict] = None) -> None:
         if topo_state:
@@ -64,14 +103,18 @@ class TraceAgent:
 
     def run_plan(self, user_intent: str, topo_state: Optional[dict] = None) -> PlanContext:
         self.initialize_state(topo_state)
-        self.derive_goal(user_intent)
-        if not self.is_scene_construction_goal():
+        goal = self.derive_goal(user_intent)
+        self._report(f"[总体目标] {goal}")
+        is_scene = self.is_scene_construction_goal()
+        self._report(f"[任务类型] {'SceneGraph构建' if is_scene else '非SceneGraph任务'}")
+        if not is_scene:
             self._run_generic_react(user_intent)
             return self.state.plan_context
 
         for step in self.generate_plan():
             self.state.set_current_step(step)
-            for _ in range(self.config.max_react_turns):
+            for turn in range(self.config.max_react_turns):
+                self._report(f"[Step] {step.label} | 回合 {turn + 1}")
                 step_result = self._run_react_turn(step, user_intent)
                 step_result, should_continue = self._confirm_step(step, step_result)
                 if should_continue:
@@ -84,7 +127,8 @@ class TraceAgent:
         """Run a ReAct loop for non-scene tasks without recording plan context."""
 
         results: list[StepResult] = []
-        for _ in range(self.config.max_react_turns):
+        for turn in range(self.config.max_react_turns):
+            self._report(f"[Step] 通用ReAct | 回合 {turn + 1}")
             result = self._run_react_turn(
                 PlanStep.UNDERSTAND_INTENT, user_intent, extra_history=results
             )
@@ -114,6 +158,8 @@ class TraceAgent:
         return self._parse_react_blocks(content)
 
     def _generate_response(self, prompt) -> str:
+        if self.config.stream and self.config.stream_handler:
+            self._stream_filter = _ThinkStreamFilter()
         if self.config.stream and hasattr(self.llm, "stream"):
             chunks: list[str] = []
             for chunk in self.llm.stream(prompt):
@@ -122,7 +168,9 @@ class TraceAgent:
                     piece = getattr(chunk.message, "content", "")
                 piece = piece or ""
                 if self.config.stream_handler and piece:
-                    self.config.stream_handler(piece)
+                    visible = self._stream_filter.feed(piece)
+                    if visible:
+                        self.config.stream_handler(visible)
                 chunks.append(piece)
             return "".join(chunks)
 
@@ -172,6 +220,10 @@ class TraceAgent:
         text = f"{result.action} {result.observe}".lower()
         completion_markers = ["[finished]", "完成", "结束", "done", "完成本步骤", "已完成", "达成"]
         return any(marker.lower() in text for marker in completion_markers)
+
+    def _report(self, message: str) -> None:
+        if self.config.progress_callback:
+            self.config.progress_callback(message)
 
     def plan_outline(self) -> str:
         steps = [step.label for step in self.generate_plan()]

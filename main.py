@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Callable, Tuple
+
+from colorama import Fore, Style, init as colorama_init
 
 # Allow running directly without installing the package (python main.py)
 ROOT = Path(__file__).resolve().parent
@@ -15,16 +18,62 @@ if str(SRC) not in sys.path:
 from trace_agent import AgentConfig, TraceAgent, build_qwen_vllm_chat_model
 from trace_agent.memory import PlanStep, StepResult
 
+colorama_init(autoreset=True)
 
-def _token_printer(token: str) -> None:
-    sys.stdout.write(token)
-    sys.stdout.flush()
+THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
-def _approval_prompt(step: PlanStep, result: StepResult) -> Tuple[bool, str | None]:
-    print(f"\n{step.label}\nThink: {result.think}\nAction: {result.action}\nObserve: {result.observe}\n")
+def strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> blocks from console output."""
+
+    return THINK_TAG_PATTERN.sub("", text).strip()
+
+
+class ConsoleTheme:
+    def heading(self, text: str) -> str:
+        return f"{Style.BRIGHT}{Fore.CYAN}{text}{Style.RESET_ALL}"
+
+    def section(self, text: str) -> str:
+        return f"{Style.BRIGHT}{Fore.MAGENTA}{text}{Style.RESET_ALL}"
+
+    def meta(self, text: str) -> str:
+        return f"{Fore.YELLOW}{text}{Style.RESET_ALL}"
+
+    def token(self, text: str) -> str:
+        return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
+
+    def label(self, text: str) -> str:
+        return f"{Style.BRIGHT}{text}{Style.RESET_ALL}"
+
+
+class TokenPrinter:
+    """Stream handler that avoids printing hidden <think> blocks (agent already filters)."""
+
+    def __init__(self, theme: ConsoleTheme) -> None:
+        self.theme = theme
+
+    def __call__(self, token: str) -> None:
+        sys.stdout.write(self.theme.token(token))
+        sys.stdout.flush()
+
+
+class ProgressPrinter:
+    def __init__(self, theme: ConsoleTheme) -> None:
+        self.theme = theme
+
+    def __call__(self, message: str) -> None:
+        print(self.theme.meta(message))
+
+
+def _approval_prompt(step: PlanStep, result: StepResult, theme: ConsoleTheme) -> Tuple[bool, str | None]:
+    think = strip_think_blocks(result.think)
+    action = strip_think_blocks(result.action)
+    observe = strip_think_blocks(result.observe)
+    print(
+        f"\n{theme.section(step.label)}\n  Think: {think}\n  Action: {action}\n  Observe: {observe}\n"
+    )
     choice = input("继续执行? (y=继续, e=编辑Think后继续, n=停止): ").strip().lower()
-    edited_think = None
+    edited_think: str | None = None
     if choice.startswith("e"):
         edited_think = input("输入修改后的Think: ").strip()
         choice = input("确认继续? (y/n): ").strip().lower()
@@ -49,11 +98,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    theme = ConsoleTheme()
+    token_printer: Callable[[str], None] | None = None if args.no_stream else TokenPrinter(theme)
+    progress_printer = ProgressPrinter(theme)
+
+    def approval(step: PlanStep, result: StepResult) -> Tuple[bool, str | None]:
+        return _approval_prompt(step, result, theme)
+
     config = AgentConfig(
         auto_execute=not args.manual,
         stream=not args.no_stream,
-        stream_handler=None if args.no_stream else _token_printer,
-        approval_callback=None if not args.manual else _approval_prompt,
+        stream_handler=token_printer,
+        progress_callback=progress_printer,
+        approval_callback=None if not args.manual else approval,
     )
 
     llm = build_qwen_vllm_chat_model(
@@ -62,13 +119,19 @@ def main() -> None:
         model=args.model,
     )
     agent = TraceAgent(llm, config)
-    print("\n--- 开始执行 PLAN + ReAct ---\n")
+    print(theme.heading("\n=== 开始执行 PLAN + ReAct ===\n"))
     plan = agent.run_plan(args.intent, topo_state={"summary": args.topo_summary})
 
-    print("\n--- 最终结果 ---\n")
+    print(theme.heading("\n=== 最终结果 ===\n"))
     for step, results in plan.steps.items():
         for idx, result in enumerate(results, start=1):
-            print(f"{step.label} #{idx}\nThink: {result.think}\nAction: {result.action}\nObserve: {result.observe}\n")
+            think = strip_think_blocks(result.think)
+            action = strip_think_blocks(result.action)
+            observe = strip_think_blocks(result.observe)
+            print(
+                f"{theme.section(f'{step.label} #{idx}')}\n"
+                f"  Think: {think}\n  Action: {action}\n  Observe: {observe}\n"
+            )
 
 
 if __name__ == "__main__":

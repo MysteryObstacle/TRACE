@@ -9,7 +9,8 @@ dependencies = [
     "langchain-community>=0.2.10",
     "langchain-core>=0.2.23",
     "langgraph>=0.2.3",
-    "pydantic>=2.8.0"
+    "pydantic>=2.8.0",
+    "colorama>=0.4.6"
 ]
 
 [build-system]
