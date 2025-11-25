@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from textwrap import dedent
 from typing import Dict, Iterable, List, Mapping, Optional
 
+from langchain.tools import tool
+
 
 @dataclass
 class Tool:
@@ -91,6 +93,23 @@ class Toolset:
 
     def describe(self) -> str:
         return "\n".join(f"{tool.name}: {tool.description}" for tool in self.all_tools)
+
+    def as_langchain_tools(self):
+        """Expose tools as LangChain-compatible callables (for create_agent)."""
+
+        wrapped = []
+
+        for static_tool in self.all_tools:
+            wrapped.append(self._wrap_static_tool(static_tool))
+
+        return wrapped
+
+    def _wrap_static_tool(self, static_tool: StaticTool):
+        @tool(name=static_tool.name, description=static_tool.description)
+        def _call(query: str = "default") -> str:
+            return static_tool.run(query or "default")
+
+        return _call
 
     def prime_topology(
         self,

@@ -82,9 +82,10 @@ If a remote already exists, simply run `git push` to publish updates.
 ## Architecture
 
 - `trace_agent.agent.TraceAgent` orchestrates initialization, PLAN step execution, and context tracking.
+- Under the hood, `TraceAgent` now wraps LangChain's `create_agent` runtime with a custom state schema so tool calls, streaming, and message memory follow the latest LangChain Python SDK patterns.
 - `trace_agent.memory` stores plan metadata, ConversationState, and handles JSON persistence for Step 5.
 - `trace_agent.prompting` contains the system primer plus prompts for goal extraction、任务分类、每步ReAct提示。
-- `trace_agent.tools.Toolset` 提供内置“静态工具”而非 `langchain.tools`：PLAN上下文查询、旧/目标Topo JSON与diff规划、SceneGraph SDK摘录、镜像清单、行业知识（普渡模型等）、Topo规范、SceneGraph代码规范。
+- `trace_agent.tools.Toolset` 既提供静态查询数据，也暴露 `as_langchain_tools()` 以生成 LangChain `@tool` 兼容的工具，覆盖 PLAN 上下文、Topo 源/目标/差异、SceneGraph SDK、镜像清单、领域知识、Topo/代码规范。
 - `trace_agent.model_provider.build_qwen_vllm_chat_model` builds a ChatOpenAI-compatible client pointing to vLLM + Qwen3。
 - `examples/offline_demo.py` demonstrates the full loop with a deterministic chat model for testing.
 
