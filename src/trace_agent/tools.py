@@ -105,7 +105,7 @@ class Toolset:
         return wrapped
 
     def _wrap_static_tool(self, static_tool: StaticTool):
-        @tool(name=static_tool.name, description=static_tool.description)
+        @tool(static_tool.name, description=static_tool.description)
         def _call(query: str = "default") -> str:
             return static_tool.run(query or "default")
 
