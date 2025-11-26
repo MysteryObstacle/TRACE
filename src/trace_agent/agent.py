@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Iterable, Optional, Tuple
 
 from langchain.agents import AgentState, create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .memory import ConversationState, PlanContext, PlanStep, StepResult
-from .prompting import (
-    GOAL_EXTRACTION_PROMPT,
-    REACT_SYSTEM_PROMPT,
-    SCENE_TASK_CLASSIFIER,
-    build_react_prompt,
-)
+from .prompting import GOAL_EXTRACTION_PROMPT, SCENE_TASK_CLASSIFIER, SYSTEM_PRIMER, build_step_prompt
 from .tools import Toolset
 
 
@@ -21,10 +16,6 @@ from .tools import Toolset
 class AgentConfig:
     auto_execute: bool = True
     default_tools: Optional[Toolset] = None
-    max_react_turns: int = 7
-    # Require at least this many turns before allowing a step to finish, even if the
-    # model emits completion markers early. Helps force multi-turn reasoning.
-    min_react_turns: int = 2
     stream: bool = False
     stream_handler: Optional[Callable[[str], None]] = None
     progress_callback: Optional[Callable[[str], None]] = None
@@ -40,43 +31,6 @@ class TraceAgentState(AgentState):
     topo_summary: str
 
 
-class _ThinkStreamFilter:
-    """Filter that suppresses <think>...</think> spans when streaming tokens."""
-
-    def __init__(self) -> None:
-        self._buffer = ""
-        self._suppress = False
-
-    def feed(self, chunk: str) -> str:
-        self._buffer += chunk
-        visible_parts: list[str] = []
-
-        while self._buffer:
-            if self._suppress:
-                end = self._buffer.find("</think>")
-                if end == -1:
-                    # Still inside a <think> block, drop everything so far.
-                    self._buffer = ""
-                    return "".join(visible_parts)
-                self._buffer = self._buffer[end + len("</think>") :]
-                self._suppress = False
-                continue
-
-            start = self._buffer.find("<think>")
-            if start == -1:
-                visible_parts.append(self._buffer)
-                self._buffer = ""
-                break
-
-            if start > 0:
-                visible_parts.append(self._buffer[:start])
-
-            self._buffer = self._buffer[start + len("<think>") :]
-            self._suppress = True
-
-        return "".join(visible_parts)
-
-
 class TraceAgent:
     """TRACE agent orchestrating the PLAN + ReAct loop."""
 
@@ -85,9 +39,7 @@ class TraceAgent:
         self.config = config or AgentConfig()
         self.state = ConversationState()
         self.tools = self.config.default_tools or Toolset()
-        self._stream_filter = _ThinkStreamFilter()
         self._lc_agent = self._build_langgraph_agent()
-        self._lc_state: dict[str, Any] = {"messages": []}
 
     def initialize_state(self, topo_state: Optional[dict] = None) -> None:
         if topo_state:
@@ -97,7 +49,7 @@ class TraceAgent:
         return create_agent(
             model=self.llm,
             tools=self.tools.as_langchain_tools(),
-            system_prompt=REACT_SYSTEM_PROMPT,
+            system_prompt=SYSTEM_PRIMER,
             state_schema=TraceAgentState,
         )
 
@@ -137,60 +89,41 @@ class TraceAgent:
         is_scene = self.is_scene_construction_goal()
         self._report(f"[任务类型] {'SceneGraph构建' if is_scene else '非SceneGraph任务'}")
         if not is_scene:
-            self._run_generic_react(user_intent)
+            self.state.set_current_step(PlanStep.UNDERSTAND_INTENT)
+            self._run_agent_step(PlanStep.UNDERSTAND_INTENT, user_intent)
             return self.state.plan_context
 
         for step in self.generate_plan():
             self.state.set_current_step(step)
-            self._reset_agent_state()
-            for turn in range(self.config.max_react_turns):
-                self._report(f"[Step] {step.label} | 回合 {turn + 1}")
-                step_result = self._run_react_turn(step, user_intent)
-                step_result, should_continue = self._confirm_step(step, step_result)
-                if should_continue:
-                    self.state.record_step(step, step_result)
-                if not should_continue or self._step_is_complete(step_result, turn):
-                    break
+            self._report(f"[Step] {step.label}")
+            self._run_agent_step(step, user_intent)
         return self.state.plan_context
 
-    def _run_generic_react(self, user_intent: str) -> list[StepResult]:
-        """Run a ReAct loop for non-scene tasks without recording plan context."""
+    def _context_snippet(self) -> str:
+        parts: list[str] = []
+        if self.state.overall_goal:
+            parts.append(f"总体目标: {self.state.overall_goal}")
+        for step, results in self.state.plan_context.steps.items():
+            for idx, result in enumerate(results, start=1):
+                parts.append(f"{step.label} #{idx}: {result.observe}")
+        return "\n".join(parts) if parts else "(无历史上下文)"
 
-        results: list[StepResult] = []
-        self._reset_agent_state()
-        for turn in range(self.config.max_react_turns):
-            self._report(f"[Step] 通用ReAct | 回合 {turn + 1}")
-            result = self._run_react_turn(
-                PlanStep.UNDERSTAND_INTENT, user_intent, extra_history=results
-            )
-            result, should_continue = self._confirm_step(PlanStep.UNDERSTAND_INTENT, result)
-            if should_continue:
-                results.append(result)
-            if not should_continue or self._step_is_complete(result, turn):
-                break
-        return results
-
-    def _run_react_turn(
-        self, step: PlanStep, user_intent: str, extra_history: Optional[list[StepResult]] = None
-    ) -> StepResult:
-        context_text = self._context_snippet(extra_history)
+    def _run_agent_step(self, step: PlanStep, user_intent: str) -> None:
+        context_text = self._context_snippet()
         self.tools.prime_plan_context(
             context_text, user_intent=user_intent, overall_goal=self.state.overall_goal
         )
 
-        # Prepare LangChain agent state with message history + this turn's human prompt.
-        human_prompt = build_react_prompt(step, self.tools.tool_names()).format(
+        human_prompt = build_step_prompt(
+            step,
+            self.tools.tool_names(),
             context=context_text,
             user_intent=user_intent,
             topo_summary=self.state.topo_json.get("summary", "(空拓扑)"),
         )
 
-        current_messages: list[BaseMessage] = list(self._lc_state.get("messages", []))
-        current_messages.append(HumanMessage(content=human_prompt))
-        base_len = len(current_messages)
-
         agent_state = {
-            "messages": current_messages,
+            "messages": [HumanMessage(content=human_prompt)],
             "plan_context": context_text,
             "user_intent": user_intent,
             "step_label": step.label,
@@ -198,85 +131,68 @@ class TraceAgent:
         }
 
         result_state = self._invoke_agent(agent_state)
-        self._lc_state = result_state
-        return self._extract_step_result(base_len, result_state.get("messages", []))
-
-    def _context_snippet(self, extra_history: Optional[list[StepResult]] = None) -> str:
-        parts: list[str] = []
-        if self.state.overall_goal:
-            parts.append(f"总体目标: {self.state.overall_goal}")
-        for step, results in self.state.plan_context.steps.items():
-            for idx, result in enumerate(results, start=1):
-                parts.append(f"{step.label} #{idx}: {result.observe}")
-        if extra_history:
-            for idx, result in enumerate(extra_history, start=1):
-                parts.append(f"当前步骤上下文 #{idx}: {result.observe}")
-        return "\n".join(parts) if parts else "(无历史上下文)"
+        for result in self._collect_step_results(result_state.get("messages", [])):
+            confirmed, proceed = self._confirm_step(step, result)
+            if proceed:
+                self.state.record_step(step, confirmed)
 
     def _invoke_agent(self, agent_state: dict) -> dict:
-        if self.config.stream and self.config.stream_handler:
-            self._stream_filter = _ThinkStreamFilter()
-
         if self.config.stream and hasattr(self._lc_agent, "stream"):
             final_state: Optional[dict] = None
             for chunk in self._lc_agent.stream(agent_state, stream_mode="values"):
                 final_state = chunk
-                self._handle_stream_chunk(chunk)
-            if self.config.stream_handler:
-                self.config.stream_handler("\n")
+                self._maybe_stream_chunk(chunk)
             return final_state or agent_state
 
         return self._lc_agent.invoke(agent_state)
 
-    def _handle_stream_chunk(self, chunk: dict) -> None:
+    def _maybe_stream_chunk(self, chunk: dict) -> None:
         if not self.config.stream_handler:
             return
 
         messages = chunk.get("messages", [])
         if not messages:
             return
+
         latest = messages[-1]
         text = getattr(latest, "content", "")
-        if not text:
-            return
-        visible = self._stream_filter.feed(text)
-        if visible:
-            self.config.stream_handler(visible)
+        if text:
+            self.config.stream_handler(text + "\n")
 
-    def _extract_step_result(self, base_len: int, messages: list[BaseMessage]) -> StepResult:
-        think_parts: list[str] = []
-        action_parts: list[str] = []
-        observe_parts: list[str] = []
+    def _collect_step_results(self, messages: Iterable[BaseMessage]) -> list[StepResult]:
+        results: list[StepResult] = []
+        pending_think: str = ""
+        pending_actions: list[str] = []
 
-        for msg in messages[base_len:]:
+        for msg in messages:
             if isinstance(msg, AIMessage):
                 if msg.tool_calls:
-                    action_parts.extend(tc.get("name", "") for tc in msg.tool_calls)
-                if msg.content:
-                    think_parts.append(msg.content)
+                    pending_think = (msg.content or "").strip()
+                    pending_actions = [tc.get("name", "") for tc in msg.tool_calls]
+                else:
+                    text = (msg.content or "").strip()
+                    results.append(
+                        StepResult(
+                            think=text or "(无思考)",
+                            action="N/A",
+                            observe=text or "(无观测)",
+                            output=None,
+                        )
+                    )
             elif isinstance(msg, ToolMessage):
-                observe_parts.append(msg.content if hasattr(msg, "content") else str(msg))
+                observe = (msg.content or "").strip()
+                results.append(
+                    StepResult(
+                        think=pending_think or "(无思考)",
+                        action="; ".join(a for a in pending_actions if a) or "N/A",
+                        observe=observe or "(无观测)",
+                        output=None,
+                    )
+                )
+                pending_think = ""
+                pending_actions = []
 
-        think = "\n".join(p for p in think_parts if p).strip() or "(无新思考)"
-        action = "; ".join(a for a in action_parts if a).strip() or "N/A"
-        observe = "\n".join(p for p in observe_parts if p).strip() or think
-        return StepResult(think=think, action=action, observe=observe, output=None)
-
-    def _reset_agent_state(self) -> None:
-        self._lc_state = {"messages": []}
-
-    def _parse_react_blocks(self, content: str) -> StepResult:
-        think, action, observe = "", "", ""
-        for line in content.splitlines():
-            if line.startswith("Think:"):
-                think = line.partition(":")[2].strip()
-            elif line.startswith("Action:"):
-                action = line.partition(":")[2].strip()
-            elif line.startswith("Observe:"):
-                observe = line.partition(":")[2].strip()
-        if not think:
-            think = content.strip()
-        return StepResult(think=think, action=action or "N/A", observe=observe or content.strip(), output=None)
+        return results
 
     def _confirm_step(self, step: PlanStep, result: StepResult) -> Tuple[StepResult, bool]:
         if self.config.auto_execute:
@@ -288,18 +204,6 @@ class TraceAgent:
         if edited_think:
             result = replace(result, think=edited_think)
         return result, bool(proceed)
-
-    def _step_is_complete(self, result: StepResult, turn_index: int) -> bool:
-        """Detect completion only when explicit markers appear after minimum turns."""
-
-        # Enforce a minimum number of turns before accepting completion to encourage
-        # multi-step reasoning instead of single-shot finishing.
-        if (turn_index + 1) < max(1, self.config.min_react_turns):
-            return False
-
-        text = f"{result.action} {result.observe}".lower()
-        # Only respect explicit markers, reducing accidental matches from tool output.
-        return "[finished]" in text
 
     def _report(self, message: str) -> None:
         if self.config.progress_callback:
