@@ -21,7 +21,21 @@ class StaticTool(Tool):
     responses: Mapping[str, str] = field(default_factory=dict)
 
     def run(self, query: str) -> str:  # pragma: no cover - placeholder behavior
-        return self.responses.get(query, f"No cached answer for: {query}")
+        """Return a canned response with a forgiving fallback.
+
+        LangChain工具调用时，模型可能用不同的提问方式（例如"拓扑JSON结构规范"、
+        "SceneGraph拓扑JSON格式"），因此这里做宽松匹配：
+        1) 优先匹配具体 query 作为 key；
+        2) 若不存在则返回 `default` 预置答案；
+        3) 如果依然缺失，则给出一个通用提示，避免出现"No cached answer"。"""
+
+        if query in self.responses:
+            return self.responses[query]
+
+        if "default" in self.responses:
+            return self.responses["default"]
+
+        return "(暂无可用答案，请补充对应的工具响应)"
 
 
 class Toolset:
@@ -66,12 +80,20 @@ class Toolset:
         self.topo_spec = StaticTool(
             name="Topo Spec",
             description="基于示例总结的Topo JSON规范",
-            responses={"default": TOPO_SPEC},
+            responses={
+                "default": TOPO_SPEC,
+                "拓扑JSON结构规范": TOPO_SPEC,
+                "SceneGraph拓扑JSON格式": TOPO_SPEC,
+            },
         )
         self.code_spec = StaticTool(
             name="SceneGraph Code Spec",
             description="基于示例总结的SceneGraph脚本/代码规范",
-            responses={"default": CODE_SPEC},
+            responses={
+                "default": CODE_SPEC,
+                "SceneGraph脚本规范": CODE_SPEC,
+                "SceneGraph代码规范": CODE_SPEC,
+            },
         )
 
     @property
@@ -107,6 +129,8 @@ class Toolset:
     def _wrap_static_tool(self, static_tool: StaticTool):
         @tool(static_tool.name, description=static_tool.description)
         def _call(query: str = "default") -> str:
+            """静态知识库查询，宽松匹配问题文本，返回预置答案。"""
+
             return static_tool.run(query or "default")
 
         return _call
