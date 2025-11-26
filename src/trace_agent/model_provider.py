@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 
 
