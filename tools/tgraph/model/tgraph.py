@@ -1,0 +1,2 @@
+class TGraph(dict):
+    pass
