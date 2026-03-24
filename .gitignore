@@ -1,5 +1,7 @@
 __pycache__/
 .pytest_cache/
+.pytest_tmp/
+pytest_temp/
 *.pyc
 *.pyo
 *.pyd
@@ -7,3 +9,4 @@ __pycache__/
 .coverage
 .venv/
 runs/
+.test_tmp/

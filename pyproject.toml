@@ -32,6 +32,9 @@ dev = [
   "pytest-asyncio>=0.24,<1.0",
 ]
 
+[tool.pytest.ini_options]
+addopts = "--basetemp=pytest_temp"
+
 [tool.setuptools]
 py-modules = ["main"]
 
