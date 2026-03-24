@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trace-iac"
+version = "0.1.0"
+description = "TRACE IaC staged agent runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "langchain==1.2.12",
+  "langgraph>=1.1.1,<1.2.0",
+  "langchain-openai==1.1.11",
+  "pydantic>=2.12,<2.14",
+  "pydantic-settings>=2.10,<3.0",
+  "typer==0.24.1",
+  "rich>=14.0,<15.0",
+  "PyYAML>=6.0,<7.0",
+  "orjson==3.11.7",
+  "tenacity>=9.0,<10.0",
+  "httpx>=0.28,<1.0",
+  "networkx>=3.4,<3.5",
+  "rustworkx==0.17.1",
+  "numpy>=2.2,<3.0",
+  "scipy>=1.14,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0",
+  "pytest-asyncio>=0.24,<1.0",
+]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["app*", "agent*", "stages*", "artifacts*", "validators*", "tools*"]
