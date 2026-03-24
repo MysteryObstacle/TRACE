@@ -6,7 +6,7 @@
 
 **Architecture:** Start with an artifact-first runtime and fake agent fixtures so the control flow is testable before any real model behavior is introduced. Once the deterministic flow is stable, add the LangChain adapter, LangSmith tracing wrapper, and thin tool/stage prompt scaffolding without expanding scope into real translation.
 
-**Tech Stack:** Python 3.12, Typer, Pydantic v2, LangChain, LangGraph, LangSmith, PyYAML, orjson, pytest, pytest-asyncio
+**Tech Stack:** Python 3.10+, Typer, Pydantic v2, LangChain, LangGraph, LangSmith, PyYAML, orjson, pytest, pytest-asyncio
 
 ---
 
@@ -901,3 +901,4 @@ git commit -m "docs: add runtime quickstart"
 - Generated validator scripts are part of runtime artifacts, not source-controlled modules.
 - If implementation reveals a spec mismatch, update the spec first, then continue.
 - Prioritize deterministic tests and small commits over broad scaffolding.
+

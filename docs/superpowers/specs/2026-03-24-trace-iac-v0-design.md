@@ -699,11 +699,11 @@ The runtime should be stabilized before relying on real-model tests.
 
 ## 12. Requirements snapshot
 
-Confirmed package direction:
+Confirmed package direction for the local bootstrap target:
 
 ```text
 langchain==1.2.12
-langgraph==1.0.10
+langgraph>=1.1.1,<1.2.0
 langchain-openai==1.1.11
 
 pydantic>=2.12,<2.14
@@ -718,10 +718,10 @@ httpx>=0.28,<1.0
 pytest>=8.0,<9.0
 pytest-asyncio>=0.24,<1.0
 
-networkx==3.6.1
+networkx>=3.4,<3.5
 rustworkx==0.17.1
 numpy>=2.2,<3.0
-scipy==1.17.1
+scipy>=1.14,<2.0
 ```
 
 ## 13. Open items deferred beyond v0
@@ -743,3 +743,4 @@ This provides the best path to:
 - stable debugging
 - clear LangSmith visibility
 - future extension to translation and additional stages
+
