@@ -50,6 +50,8 @@ class StageRuntime:
     def run_stage(self, stage_id: str) -> StageRunResult:
         if stage_id == 'logical':
             return self._run_logical_stage()
+        if stage_id == 'physical':
+            return self._run_physical_stage()
 
         spec = self.stage_specs[stage_id]
         attempt = 1
@@ -130,6 +132,61 @@ class StageRuntime:
 
         raise StageRuntimeError('Stage logical exceeded max repair rounds.')
 
+    def _run_physical_stage(self) -> StageRunResult:
+        spec = self.stage_specs['physical']
+        attempt = 1
+
+        with self.tracer.stage_run(stage_id='physical'):
+            while attempt <= spec.max_rounds:
+                inputs = resolve_inputs(self.artifact_store, spec.inputs)
+                response = self.agent_facade.invoke(
+                    AgentRequest(
+                        stage_id='physical',
+                        prompt=spec.prompt_path,
+                        inputs={**inputs, 'runtime.mode': 'check_author'},
+                    )
+                )
+                model = PhysicalOutput.model_validate(response.output)
+                payload = model.model_dump(mode='json')
+
+                if self._needs_physical_graph_builder(payload):
+                    self._assert_physical_author_payload(payload)
+                    response = self.agent_facade.invoke(
+                        AgentRequest(
+                            stage_id='physical',
+                            prompt=spec.prompt_path,
+                            inputs={
+                                **inputs,
+                                'runtime.mode': 'graph_builder',
+                                'runtime.physical_checkpoints': payload['physical_checkpoints'],
+                                'runtime.physical_validator_script': payload['physical_validator_script'],
+                            },
+                        )
+                    )
+                    builder_model = PhysicalOutput.model_validate(response.output)
+                    builder_payload = builder_model.model_dump(mode='json')
+                    if not builder_payload.get('physical_checkpoints'):
+                        builder_payload['physical_checkpoints'] = payload['physical_checkpoints']
+                    if builder_payload.get('physical_validator_script') is None:
+                        builder_payload['physical_validator_script'] = payload['physical_validator_script']
+                    payload = builder_payload
+
+                output_refs = self._persist_physical_output(payload)
+                validation_report = self._validate_stage_output('physical', payload)
+
+                if validation_report is None or validation_report.ok or spec.repair_mode == 'none':
+                    return StageRunResult(
+                        stage_id='physical',
+                        inputs=inputs,
+                        output_refs=output_refs,
+                        attempts=attempt,
+                        validation_report=validation_report,
+                    )
+
+                attempt += 1
+
+        raise StageRuntimeError('Stage physical exceeded max repair rounds.')
+
     def _persist_stage_output(self, stage_id: str, output: dict[str, Any]) -> list[ArtifactRef]:
         if stage_id == 'ground':
             return self._persist_ground_output(output)
@@ -156,9 +213,10 @@ class StageRuntime:
             if stage_id == 'physical':
                 model = PhysicalOutput.model_validate(output)
                 payload = model.model_dump(mode='json')
+                logical_checkpoints = self._load_latest_artifact('logical', 'logical_checkpoints') or []
                 return self.checkpoint_runner(
                     self._resolve_physical_graph(payload),
-                    payload['physical_checkpoints'],
+                    [*logical_checkpoints, *payload['physical_checkpoints']],
                     str(self.artifact_store.root / 'physical' / 'artifacts'),
                 )
 
@@ -238,3 +296,19 @@ class StageRuntime:
     def _assert_logical_author_payload(payload: dict[str, Any]) -> None:
         if not payload.get('logical_checkpoints'):
             raise ValueError('Logical check-author output must include at least one checkpoint.')
+
+    @staticmethod
+    def _needs_physical_graph_builder(payload: dict[str, Any]) -> bool:
+        return bool(payload.get('physical_checkpoints')) and not payload.get('tgraph_physical') and not payload.get('physical_patch_ops')
+
+    @staticmethod
+    def _assert_physical_author_payload(payload: dict[str, Any]) -> None:
+        if not payload.get('physical_checkpoints'):
+            raise ValueError('Physical check-author output must include at least one checkpoint.')
+
+    def _load_latest_artifact(self, stage: str, name: str) -> Any:
+        latest = self.artifact_store.read_latest(stage, name)
+        if latest is None:
+            return None
+        _, payload = latest
+        return payload
