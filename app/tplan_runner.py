@@ -14,6 +14,7 @@ class RunnerResult(BaseModel):
     run_id: str
     status: str
     stage_history: list[str] = Field(default_factory=list)
+    validation_attempts: dict[str, int] = Field(default_factory=dict)
 
 
 class TPlanRunner:
@@ -25,6 +26,7 @@ class TPlanRunner:
     def run(self, intent: str) -> RunnerResult:
         run_id = uuid4().hex[:8]
         stage_history: list[str] = []
+        validation_attempts: dict[str, int] = {}
         self.run_root.mkdir(parents=True, exist_ok=True)
         write_checkpoint(
             self.run_root / 'run_start.json',
@@ -32,18 +34,41 @@ class TPlanRunner:
         )
 
         for stage_id in self.stage_order:
-            self.stage_runtime.run_stage(stage_id)
+            result = self.stage_runtime.run_stage(stage_id)
             stage_history.append(stage_id)
+            validation_attempts[stage_id] = result.attempts
 
         self.translate_stub({'run_id': run_id, 'intent': intent})
         write_checkpoint(
-            self.run_root / 'run_complete.json',
-            {'run_id': run_id, 'status': 'completed', 'stage_history': stage_history},
+            self.run_root / 'state.json',
+            {
+                'run_id': run_id,
+                'status': 'completed',
+                'stage_history': stage_history,
+                'validation_attempts': validation_attempts,
+            },
         )
-        return RunnerResult(run_id=run_id, status='completed', stage_history=stage_history)
+        return RunnerResult(
+            run_id=run_id,
+            status='completed',
+            stage_history=stage_history,
+            validation_attempts=validation_attempts,
+        )
 
     def resume(self, run_id: str) -> RunnerResult:
-        return RunnerResult(run_id=run_id, status='completed', stage_history=[])
+        state_path = self.run_root / 'state.json'
+        if not state_path.exists():
+            return RunnerResult(run_id=run_id, status='completed', stage_history=[], validation_attempts={})
+
+        import orjson
+
+        payload = orjson.loads(state_path.read_bytes())
+        return RunnerResult(
+            run_id=payload['run_id'],
+            status=payload['status'],
+            stage_history=payload.get('stage_history', []),
+            validation_attempts=payload.get('validation_attempts', {}),
+        )
 
     def translate_stub(self, payload: dict[str, Any]) -> None:
         _ = payload

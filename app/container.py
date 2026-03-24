@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agent.facade import FakeAgentFacade
 from agent.types import AgentResult
+from app.checkpoint_runner import run_checkpoints
 from app.stage_runtime import StageRuntime
 from app.tplan_runner import TPlanRunner
 from app.transition_policy import DEFAULT_STAGE_ORDER
@@ -25,6 +26,7 @@ def build_container(root: str | Path) -> AppContainer:
         artifact_store=artifact_store,
         agent_facade=FakeAgentFacade(_default_fixtures()),
         stage_specs=STAGE_SPECS,
+        checkpoint_runner=run_checkpoints,
     )
     runner = TPlanRunner(
         stage_runtime=stage_runtime,
