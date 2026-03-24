@@ -48,6 +48,9 @@ class StageRuntime:
         self.tracer = tracer or TraceRecorder(enabled=False)
 
     def run_stage(self, stage_id: str) -> StageRunResult:
+        if stage_id == 'logical':
+            return self._run_logical_stage()
+
         spec = self.stage_specs[stage_id]
         attempt = 1
 
@@ -71,6 +74,61 @@ class StageRuntime:
                 attempt += 1
 
         raise StageRuntimeError(f'Stage {stage_id} exceeded max repair rounds.')
+
+    def _run_logical_stage(self) -> StageRunResult:
+        spec = self.stage_specs['logical']
+        attempt = 1
+
+        with self.tracer.stage_run(stage_id='logical'):
+            while attempt <= spec.max_rounds:
+                inputs = resolve_inputs(self.artifact_store, spec.inputs)
+                response = self.agent_facade.invoke(
+                    AgentRequest(
+                        stage_id='logical',
+                        prompt=spec.prompt_path,
+                        inputs={**inputs, 'runtime.mode': 'check_author'},
+                    )
+                )
+                model = LogicalOutput.model_validate(response.output)
+                payload = model.model_dump(mode='json')
+
+                if self._needs_logical_graph_builder(payload):
+                    self._assert_logical_author_payload(payload)
+                    response = self.agent_facade.invoke(
+                        AgentRequest(
+                            stage_id='logical',
+                            prompt=spec.prompt_path,
+                            inputs={
+                                **inputs,
+                                'runtime.mode': 'graph_builder',
+                                'runtime.logical_checkpoints': payload['logical_checkpoints'],
+                                'runtime.logical_validator_script': payload['logical_validator_script'],
+                            },
+                        )
+                    )
+                    builder_model = LogicalOutput.model_validate(response.output)
+                    builder_payload = builder_model.model_dump(mode='json')
+                    if not builder_payload.get('logical_checkpoints'):
+                        builder_payload['logical_checkpoints'] = payload['logical_checkpoints']
+                    if builder_payload.get('logical_validator_script') is None:
+                        builder_payload['logical_validator_script'] = payload['logical_validator_script']
+                    payload = builder_payload
+
+                output_refs = self._persist_logical_output(payload)
+                validation_report = self._validate_stage_output('logical', payload)
+
+                if validation_report is None or validation_report.ok or spec.repair_mode == 'none':
+                    return StageRunResult(
+                        stage_id='logical',
+                        inputs=inputs,
+                        output_refs=output_refs,
+                        attempts=attempt,
+                        validation_report=validation_report,
+                    )
+
+                attempt += 1
+
+        raise StageRuntimeError('Stage logical exceeded max repair rounds.')
 
     def _persist_stage_output(self, stage_id: str, output: dict[str, Any]) -> list[ArtifactRef]:
         if stage_id == 'ground':
@@ -171,3 +229,12 @@ class StageRuntime:
         if graph:
             return graph
         return apply_patch_ops({'profile': 'taal.default.v1', 'nodes': [], 'links': []}, payload.get('physical_patch_ops', []))
+
+    @staticmethod
+    def _needs_logical_graph_builder(payload: dict[str, Any]) -> bool:
+        return bool(payload.get('logical_checkpoints')) and not payload.get('tgraph_logical') and not payload.get('logical_patch_ops')
+
+    @staticmethod
+    def _assert_logical_author_payload(payload: dict[str, Any]) -> None:
+        if not payload.get('logical_checkpoints'):
+            raise ValueError('Logical check-author output must include at least one checkpoint.')
