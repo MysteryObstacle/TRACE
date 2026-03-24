@@ -2,6 +2,7 @@ import shutil
 from pathlib import Path
 
 from agent.facade import FakeAgentFacade
+from agent.facade import LangChainAgentFacade
 from agent.types import AgentResult
 from app.container import build_container
 from app.stage_runtime import StageRuntime
@@ -40,7 +41,7 @@ def test_runner_executes_three_stages_in_order() -> None:
                                     'script_ref': None,
                                 }
                             ],
-                            'tgraph_logical': {'nodes': [{'id': 'PLC1'}, {'id': 'PLC2'}], 'edges': []},
+                            'tgraph_logical': {'profile': 'logical.v1', 'nodes': [], 'links': []},
                             'logical_validator_script': None,
                         },
                     ),
@@ -56,7 +57,7 @@ def test_runner_executes_three_stages_in_order() -> None:
                                     'script_ref': None,
                                 }
                             ],
-                            'tgraph_physical': {'nodes': [{'id': 'PLC1'}, {'id': 'PLC2'}], 'edges': []},
+                            'tgraph_physical': {'profile': 'taal.default.v1', 'nodes': [], 'links': []},
                             'physical_validator_script': None,
                         },
                     ),
@@ -93,5 +94,52 @@ def test_container_builds_tracing_client_when_enabled() -> None:
         container = build_container(temp_dir, config_dir=temp_dir / 'configs')
 
         assert container.tracer.enabled is True
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_container_uses_langchain_backend_when_configured(monkeypatch) -> None:
+    temp_dir = Path('.test_tmp/container-langchain-case')
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    (temp_dir / 'configs' / 'stages').mkdir(parents=True, exist_ok=True)
+
+    try:
+        (temp_dir / 'configs' / 'app.yaml').write_text('langsmith_enabled: false\nagent_backend: langchain\n')
+        (temp_dir / 'configs' / 'model.yaml').write_text('model_name: gpt-5-mini\n')
+        (temp_dir / 'configs' / 'stages' / 'ground.yaml').write_text('id: ground\n')
+        (temp_dir / 'configs' / 'stages' / 'logical.yaml').write_text('id: logical\n')
+        (temp_dir / 'configs' / 'stages' / 'physical.yaml').write_text('id: physical\n')
+
+        class DummyModel:
+            def invoke(self, messages):
+                return {'output': {'node_patterns': ['PLC[1..2]'], 'logical_constraints': [], 'physical_constraints': []}}
+
+        monkeypatch.setattr('app.container.build_chat_model', lambda model_name: DummyModel())
+
+        container = build_container(temp_dir, config_dir=temp_dir / 'configs')
+
+        assert isinstance(container.runner.stage_runtime.agent_facade, LangChainAgentFacade)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_container_defaults_to_langchain_backend(monkeypatch) -> None:
+    temp_dir = Path('.test_tmp/container-default-langchain-case')
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    (temp_dir / 'configs').mkdir(parents=True, exist_ok=True)
+
+    try:
+        (temp_dir / 'configs' / 'model.yaml').write_text('model_name: gpt-5-mini\n')
+
+        class DummyModel:
+            def invoke(self, messages):
+                return {'output': {'node_patterns': ['PLC[1..2]'], 'logical_constraints': [], 'physical_constraints': []}}
+
+        monkeypatch.setattr('app.container.build_chat_model', lambda model_name: DummyModel())
+
+        container = build_container(temp_dir, config_dir=temp_dir / 'configs')
+
+        assert container.settings.agent_backend == 'langchain'
+        assert isinstance(container.runner.stage_runtime.agent_facade, LangChainAgentFacade)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

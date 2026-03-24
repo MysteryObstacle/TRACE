@@ -5,7 +5,7 @@ TRACE is a staged agent runtime for turning user intent into topology artifacts.
 - `ground -> logical -> physical -> translate_stub`
 - explicit artifact passing between stages
 - validator-driven retries in `logical` and `physical`
-- fake-agent execution by default, with a thin LangChain adapter already in place
+- LangChain-backed execution by default, with explicit fake mode still available for tests and controlled runs
 - LangSmith-ready tracing hooks behind a lightweight recorder abstraction
 
 ## Current Status
@@ -26,7 +26,6 @@ What is working now:
 What is intentionally still stubbed:
 
 - real translate step
-- real stage prompts and stage-specific reasoning quality
 - production-grade validator sandboxing
 - rich tool implementations
 - real LangSmith client wiring beyond the current trace abstraction
@@ -62,7 +61,7 @@ The codebase is organized around an artifact-first runtime.
 ### Top-level flow
 
 - [main.py](/d:/Paper/10.Domain%20Agent/Trace/main.py): CLI entrypoint for `run` and `resume`
-- [app/container.py](/d:/Paper/10.Domain%20Agent/Trace/app/container.py): builds the runtime container, loads config, installs tracer and fake fixtures
+- [app/container.py](/d:/Paper/10.Domain%20Agent/Trace/app/container.py): builds the runtime container, loads config, installs tracer, and selects fake or LangChain execution
 - [app/tplan_runner.py](/d:/Paper/10.Domain%20Agent/Trace/app/tplan_runner.py): executes `ground -> logical -> physical -> translate_stub`
 - [app/stage_runtime.py](/d:/Paper/10.Domain%20Agent/Trace/app/stage_runtime.py): resolves declared inputs, calls the agent, persists outputs, runs validation, and retries repairable stages
 
@@ -101,7 +100,7 @@ The codebase is organized around an artifact-first runtime.
 
 - [tools/registry.py](/d:/Paper/10.Domain%20Agent/Trace/tools/registry.py): global tool registry
 - [tools/policy.py](/d:/Paper/10.Domain%20Agent/Trace/tools/policy.py): stage allowlist policy
-- [prompts/ground.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/ground.md), [prompts/logical.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/logical.md), [prompts/physical.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/physical.md): stage prompt placeholders
+- [prompts/ground.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/ground.md), [prompts/logical.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/logical.md), [prompts/physical.md](/d:/Paper/10.Domain%20Agent/Trace/prompts/physical.md): stage prompt guidance for grounding, logical author/build, and physical author/build
 
 ### Tests
 
@@ -118,12 +117,12 @@ At the moment, the runtime behaves like this:
 
 2. `logical`
 - reads `ground.expanded_node_ids` and `ground.logical_constraints`
-- outputs `logical_checkpoints` and `tgraph_logical`
+- authors `logical_checkpoints`, then builds `tgraph_logical` through patch-first round outputs
 - runs validator checkpoints and retries on failure
 
 3. `physical`
 - reads `ground.expanded_node_ids`, `ground.physical_constraints`, `logical.logical_checkpoints`, and `logical.tgraph_logical`
-- outputs `physical_checkpoints` and `tgraph_physical`
+- authors `physical_checkpoints`, then builds `tgraph_physical` through patch-first round outputs
 - runs validator checkpoints and retries on failure
 
 4. `translate_stub`
@@ -131,13 +130,17 @@ At the moment, the runtime behaves like this:
 
 ## TODO
 
-- Replace the default fake fixtures in [app/container.py](/d:/Paper/10.Domain%20Agent/Trace/app/container.py) with real stage-agent execution driven by config.
-- Improve stage prompts and structured output steering so `ground`, `logical`, and `physical` produce useful artifacts instead of placeholder outputs.
-- Expand graph patch support beyond `add_node` and `add_edge` to full repair operations.
-- Persist richer run metadata such as timeline events, per-attempt validation reports, and patch histories.
-- Implement real `resume` semantics from saved checkpoints instead of the current minimal state reload.
-- Move validator execution toward a safer sandbox model for generated Python scripts.
-- Replace the current no-op `TraceRecorder` with a real LangSmith-backed implementation.
-- Flesh out `tools/knowledge/*` and `tools/tgraph/*` so stages can use real retrieval and graph manipulation helpers.
-- Implement the actual translation module after `physical`, including target IaC selection and artifact output strategy.
-- Add more realistic integration tests that run the real LangChain facade against controlled stubs or fixtures.
+### Capability layer
+
+- [ ] Make `.env` model settings actually drive default model invocation so `qwen-plus-1220` can call DashScope in the normal execution path.
+- [ ] Replace `translate_stub()` in [app/tplan_runner.py](/d:/Paper/10.Domain%20Agent/Trace/app/tplan_runner.py) with a real translation stage, including post-`physical` artifact output strategy.
+- [ ] Implement full checkpoint-level `resume` semantics instead of the current minimal state reload.
+- [ ] Replace the current tracing shell with a complete LangSmith-backed implementation.
+- [ ] Flesh out `tools/knowledge/*` and `tools/tgraph/*` so stages can use real retrieval and graph manipulation helpers.
+- [ ] Expand patch and repair support beyond the current minimal graph operations to a full repair system.
+- [ ] Move generated Python validator execution toward a stronger sandbox or isolation model.
+
+### Runtime and quality
+
+- [ ] Persist richer run metadata such as timeline events, per-attempt validation reports, and patch histories.
+- [ ] Add more realistic integration tests that run the real LangChain facade against controlled stubs or fixtures.

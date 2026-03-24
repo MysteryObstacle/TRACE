@@ -5,7 +5,9 @@ from pathlib import Path
 
 import yaml
 
-from agent.facade import FakeAgentFacade
+from agent.facade import FakeAgentFacade, LangChainAgentFacade
+from agent.langchain.engine import LangChainEngine
+from agent.langchain.model_factory import build_chat_model
 from agent.langchain.tracing import TraceRecorder
 from agent.types import AgentResult
 from app.checkpoint_runner import run_checkpoints
@@ -18,7 +20,7 @@ from stages.registry import STAGE_SPECS
 
 @dataclass
 class AppSettings:
-    agent_backend: str = 'fake'
+    agent_backend: str = 'langchain'
     langsmith_enabled: bool = False
     model_name: str = 'gpt-5-mini'
 
@@ -39,7 +41,7 @@ def build_container(root: str | Path, config_dir: str | Path | None = None) -> A
     artifact_store = ArtifactStore(run_root)
     stage_runtime = StageRuntime(
         artifact_store=artifact_store,
-        agent_facade=FakeAgentFacade(_default_fixtures()),
+        agent_facade=_build_agent_facade(settings),
         stage_specs=STAGE_SPECS,
         checkpoint_runner=run_checkpoints,
         tracer=tracer,
@@ -57,7 +59,7 @@ def load_settings(config_dir: Path) -> AppSettings:
     app_config = _read_yaml(config_dir / 'app.yaml')
     model_config = _read_yaml(config_dir / 'model.yaml')
     return AppSettings(
-        agent_backend=app_config.get('agent_backend', 'fake'),
+        agent_backend=app_config.get('agent_backend', 'langchain'),
         langsmith_enabled=bool(app_config.get('langsmith_enabled', False)),
         model_name=model_config.get('model_name', 'gpt-5-mini'),
     )
@@ -70,6 +72,13 @@ def _read_yaml(path: Path) -> dict:
     return data or {}
 
 
+def _build_agent_facade(settings: AppSettings):
+    if settings.agent_backend == 'langchain':
+        model = build_chat_model(settings.model_name)
+        return LangChainAgentFacade(LangChainEngine(model))
+    return FakeAgentFacade(_default_fixtures())
+
+
 def _default_fixtures() -> dict[str, AgentResult]:
     return {
         'ground': AgentResult(
@@ -80,7 +89,6 @@ def _default_fixtures() -> dict[str, AgentResult]:
                     {
                         'id': 'lc1',
                         'scope': 'topology',
-                        'targets': [],
                         'text': 'HMI must reach all PLC nodes.',
                     }
                 ],
@@ -88,7 +96,6 @@ def _default_fixtures() -> dict[str, AgentResult]:
                     {
                         'id': 'pc1',
                         'scope': 'topology',
-                        'targets': [],
                         'text': 'Control traffic must stay isolated from management traffic.',
                     }
                 ],
@@ -106,7 +113,11 @@ def _default_fixtures() -> dict[str, AgentResult]:
                         'script_ref': None,
                     }
                 ],
-                'tgraph_logical': {'nodes': [{'id': 'PLC1'}, {'id': 'PLC2'}, {'id': 'HMI1'}], 'edges': []},
+                'logical_patch_ops': [
+                    {'op': 'add_node', 'value': {'id': 'PLC1', 'type': 'computer', 'label': 'PLC1', 'ports': [], 'image': None, 'flavor': None}},
+                    {'op': 'add_node', 'value': {'id': 'PLC2', 'type': 'computer', 'label': 'PLC2', 'ports': [], 'image': None, 'flavor': None}},
+                    {'op': 'add_node', 'value': {'id': 'HMI1', 'type': 'computer', 'label': 'HMI1', 'ports': [], 'image': None, 'flavor': None}},
+                ],
                 'logical_validator_script': None,
             },
         ),
@@ -122,7 +133,11 @@ def _default_fixtures() -> dict[str, AgentResult]:
                         'script_ref': None,
                     }
                 ],
-                'tgraph_physical': {'nodes': [{'id': 'PLC1'}, {'id': 'PLC2'}, {'id': 'HMI1'}], 'edges': []},
+                'physical_patch_ops': [
+                    {'op': 'add_node', 'value': {'id': 'PLC1', 'type': 'computer', 'label': 'PLC1', 'ports': [], 'image': {'id': 'ubuntu-22', 'name': 'Ubuntu 22.04'}, 'flavor': {'vcpu': 2, 'ram': 2048, 'disk': 20}}},
+                    {'op': 'add_node', 'value': {'id': 'PLC2', 'type': 'computer', 'label': 'PLC2', 'ports': [], 'image': {'id': 'ubuntu-22', 'name': 'Ubuntu 22.04'}, 'flavor': {'vcpu': 2, 'ram': 2048, 'disk': 20}}},
+                    {'op': 'add_node', 'value': {'id': 'HMI1', 'type': 'computer', 'label': 'HMI1', 'ports': [], 'image': {'id': 'ubuntu-22', 'name': 'Ubuntu 22.04'}, 'flavor': {'vcpu': 2, 'ram': 2048, 'disk': 20}}},
+                ],
                 'physical_validator_script': None,
             },
         ),
