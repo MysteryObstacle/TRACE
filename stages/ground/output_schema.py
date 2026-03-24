@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 class ConstraintItem(BaseModel):
     id: str
     scope: Literal["node_ids", "topology"]
-    targets: list[str] = Field(default_factory=list)
     text: str
 
 

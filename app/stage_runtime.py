@@ -18,6 +18,7 @@ from stages.logical.guard import assert_valid as assert_logical_valid
 from stages.logical.output_schema import LogicalOutput
 from stages.physical.guard import assert_valid as assert_physical_valid
 from stages.physical.output_schema import PhysicalOutput
+from validators.patching import apply_patch_ops
 
 
 CheckpointRunner = Callable[[dict[str, Any], list[dict[str, Any]], str], ValidationReport]
@@ -89,7 +90,7 @@ class StageRuntime:
                 model = LogicalOutput.model_validate(output)
                 payload = model.model_dump(mode='json')
                 return self.checkpoint_runner(
-                    payload['tgraph_logical'],
+                    self._resolve_logical_graph(payload),
                     payload['logical_checkpoints'],
                     str(self.artifact_store.root / 'logical' / 'artifacts'),
                 )
@@ -98,7 +99,7 @@ class StageRuntime:
                 model = PhysicalOutput.model_validate(output)
                 payload = model.model_dump(mode='json')
                 return self.checkpoint_runner(
-                    payload['tgraph_physical'],
+                    self._resolve_physical_graph(payload),
                     payload['physical_checkpoints'],
                     str(self.artifact_store.root / 'physical' / 'artifacts'),
                 )
@@ -125,9 +126,10 @@ class StageRuntime:
         model = LogicalOutput.model_validate(output)
         assert_logical_valid(model)
         payload = model.model_dump(mode='json')
+        graph = self._resolve_logical_graph(payload)
         refs = [
             self.artifact_store.write('logical', 'logical_checkpoints', payload['logical_checkpoints']),
-            self.artifact_store.write('logical', 'tgraph_logical', payload['tgraph_logical']),
+            self.artifact_store.write('logical', 'tgraph_logical', graph),
         ]
         if payload['logical_validator_script'] is not None:
             refs.append(
@@ -143,9 +145,10 @@ class StageRuntime:
         model = PhysicalOutput.model_validate(output)
         assert_physical_valid(model)
         payload = model.model_dump(mode='json')
+        graph = self._resolve_physical_graph(payload)
         refs = [
             self.artifact_store.write('physical', 'physical_checkpoints', payload['physical_checkpoints']),
-            self.artifact_store.write('physical', 'tgraph_physical', payload['tgraph_physical']),
+            self.artifact_store.write('physical', 'tgraph_physical', graph),
         ]
         if payload['physical_validator_script'] is not None:
             refs.append(
@@ -156,3 +159,15 @@ class StageRuntime:
                 )
             )
         return refs
+
+    def _resolve_logical_graph(self, payload: dict[str, Any]) -> dict[str, Any]:
+        graph = payload.get('tgraph_logical') or {}
+        if graph:
+            return graph
+        return apply_patch_ops({'profile': 'logical.v1', 'nodes': [], 'links': []}, payload.get('logical_patch_ops', []))
+
+    def _resolve_physical_graph(self, payload: dict[str, Any]) -> dict[str, Any]:
+        graph = payload.get('tgraph_physical') or {}
+        if graph:
+            return graph
+        return apply_patch_ops({'profile': 'taal.default.v1', 'nodes': [], 'links': []}, payload.get('physical_patch_ops', []))
