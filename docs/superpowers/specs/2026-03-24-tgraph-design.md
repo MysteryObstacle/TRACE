@@ -11,6 +11,7 @@ This document defines the TGraph domain core that connects the `logical` and `ph
 TGraph is not only a JSON file format. It is the shared graph layer that owns:
 
 - graph initialization from supported external formats
+- graph export into standard JSON profiles
 - canonical graph models used across stages
 - validation across format, schema, consistency, and intent layers
 - graph materialization from logical topology to physical TAAL topology
@@ -31,6 +32,7 @@ Therefore the TGraph design must support multiple graph profiles under one domai
 - Make TGraph the shared domain layer between `logical` and `physical`
 - Define one internal graph core with multiple external profiles
 - Support JSON as the standard initialization format
+- Support stable JSON export from the canonical graph
 - Reserve clean extension points for `.gml` and `.gns3` import
 - Validate graphs through layered checks:
   - F1 output format
@@ -198,6 +200,7 @@ tools/
   tgraph/
     __init__.py
     docs/
+      export.md
       init.md
       profiles.md
       validation.md
@@ -292,6 +295,44 @@ All imports must normalize into the canonical internal model before they reach:
 - materialize
 
 This keeps downstream logic profile-aware but format-independent.
+
+### 7.4 Export design
+
+V1 must support exporting the canonical graph into standard JSON outputs only.
+
+Supported export targets in v1:
+
+- `logical.v1`
+- `taal.default.v1`
+
+This export capability should be owned by the existing serialization boundary rather than by stage-specific code.
+
+Recommended API direction:
+
+```python
+serialize(graph, profile="logical.v1")
+export_tgraph_json(graph, profile="logical.v1")
+```
+
+Export rules:
+
+- the exported payload must include the explicit `profile`
+- the payload must be fully JSON-serializable
+- field names must match the profile contract exactly
+- output should be stable and deterministic for identical graph state
+- v1 export does not include `.gml` or `.gns3`
+
+Recommended export error codes:
+
+- `unsupported_export_profile`
+- `export_profile_mismatch`
+- `export_non_serializable_value`
+
+Recommended ownership split:
+
+- `io/*` owns import entrypoints
+- `ops/serialize.py` owns canonical graph to JSON profile export
+- stage runtime writes exported JSON artifacts but does not implement export rules itself
 
 ## 8. Validation architecture
 
@@ -552,6 +593,8 @@ TGraph capabilities should be documented as separate markdown files under `tools
 
 Required initial docs:
 
+- `export.md`
+
 - `profiles.md`
 - `init.md`
 - `validation.md`
@@ -579,6 +622,7 @@ Implementation should proceed in four slices.
 - replace the older `nodes` and `edges` assumption with `nodes` and `links`
 - define `logical.v1` and `taal.default.v1`
 - add canonical model and indexes
+- define stable JSON export rules for `logical.v1` and `taal.default.v1`
 - expand the issue contract so scope and targets are usable for repair
 
 ### 14.2 Slice 2: F1-F3 validation core
@@ -605,6 +649,7 @@ Implementation should proceed in four slices.
 The highest-value first implementation slice is:
 
 - profile support
+- stable JSON export support
 - F2 and F3 validation
 - runner alignment with the new TGraph contract
 
@@ -624,5 +669,4 @@ This gives TRACE:
 - reusable graph algorithms for intent checks
 - stable repair-oriented validation
 - room to add future importers and TAAL profile variants without redesigning the runtime
-
 
