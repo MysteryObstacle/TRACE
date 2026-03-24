@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agent.facade import FakeAgentFacade
 from agent.types import AgentResult
+from app.container import build_container
 from app.stage_runtime import StageRuntime
 from app.tplan_runner import TPlanRunner
 from artifacts.store import ArtifactStore
@@ -73,5 +74,24 @@ def test_runner_executes_three_stages_in_order() -> None:
 
         assert result.status == 'completed'
         assert result.stage_history == ['ground', 'logical', 'physical']
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_container_builds_tracing_client_when_enabled() -> None:
+    temp_dir = Path('.test_tmp/container-config-case')
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    (temp_dir / 'configs' / 'stages').mkdir(parents=True, exist_ok=True)
+
+    try:
+        (temp_dir / 'configs' / 'app.yaml').write_text('langsmith_enabled: true\nagent_backend: fake\n')
+        (temp_dir / 'configs' / 'model.yaml').write_text('model_name: gpt-5-mini\n')
+        (temp_dir / 'configs' / 'stages' / 'ground.yaml').write_text('id: ground\n')
+        (temp_dir / 'configs' / 'stages' / 'logical.yaml').write_text('id: logical\n')
+        (temp_dir / 'configs' / 'stages' / 'physical.yaml').write_text('id: physical\n')
+
+        container = build_container(temp_dir, config_dir=temp_dir / 'configs')
+
+        assert container.tracer.enabled is True
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

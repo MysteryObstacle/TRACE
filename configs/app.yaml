@@ -1,0 +1,2 @@
+agent_backend: fake
+langsmith_enabled: false

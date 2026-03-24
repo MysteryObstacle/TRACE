@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
+from agent.langchain.tracing import TraceRecorder
 from agent.ports import ReasonerPort
 from agent.types import AgentRequest
 from app.contracts import ArtifactRef, ValidationReport
@@ -37,33 +38,36 @@ class StageRuntime:
         agent_facade: ReasonerPort,
         stage_specs: dict[str, Any],
         checkpoint_runner: CheckpointRunner | None = None,
+        tracer: TraceRecorder | None = None,
     ) -> None:
         self.artifact_store = artifact_store
         self.agent_facade = agent_facade
         self.stage_specs = stage_specs
         self.checkpoint_runner = checkpoint_runner
+        self.tracer = tracer or TraceRecorder(enabled=False)
 
     def run_stage(self, stage_id: str) -> StageRunResult:
         spec = self.stage_specs[stage_id]
         attempt = 1
 
-        while attempt <= spec.max_rounds:
-            inputs = resolve_inputs(self.artifact_store, spec.inputs)
-            request = AgentRequest(stage_id=stage_id, prompt=spec.prompt_path, inputs=inputs)
-            response = self.agent_facade.invoke(request)
-            output_refs = self._persist_stage_output(stage_id, response.output)
-            validation_report = self._validate_stage_output(stage_id, response.output)
+        with self.tracer.stage_run(stage_id=stage_id):
+            while attempt <= spec.max_rounds:
+                inputs = resolve_inputs(self.artifact_store, spec.inputs)
+                request = AgentRequest(stage_id=stage_id, prompt=spec.prompt_path, inputs=inputs)
+                response = self.agent_facade.invoke(request)
+                output_refs = self._persist_stage_output(stage_id, response.output)
+                validation_report = self._validate_stage_output(stage_id, response.output)
 
-            if validation_report is None or validation_report.ok or spec.repair_mode == 'none':
-                return StageRunResult(
-                    stage_id=stage_id,
-                    inputs=inputs,
-                    output_refs=output_refs,
-                    attempts=attempt,
-                    validation_report=validation_report,
-                )
+                if validation_report is None or validation_report.ok or spec.repair_mode == 'none':
+                    return StageRunResult(
+                        stage_id=stage_id,
+                        inputs=inputs,
+                        output_refs=output_refs,
+                        attempts=attempt,
+                        validation_report=validation_report,
+                    )
 
-            attempt += 1
+                attempt += 1
 
         raise StageRuntimeError(f'Stage {stage_id} exceeded max repair rounds.')
 
@@ -80,23 +84,24 @@ class StageRuntime:
         if self.checkpoint_runner is None or stage_id == 'ground':
             return None
 
-        if stage_id == 'logical':
-            model = LogicalOutput.model_validate(output)
-            payload = model.model_dump(mode='json')
-            return self.checkpoint_runner(
-                payload['tgraph_logical'],
-                payload['logical_checkpoints'],
-                str(self.artifact_store.root / 'logical' / 'artifacts'),
-            )
+        with self.tracer.validation_run(stage_id=stage_id):
+            if stage_id == 'logical':
+                model = LogicalOutput.model_validate(output)
+                payload = model.model_dump(mode='json')
+                return self.checkpoint_runner(
+                    payload['tgraph_logical'],
+                    payload['logical_checkpoints'],
+                    str(self.artifact_store.root / 'logical' / 'artifacts'),
+                )
 
-        if stage_id == 'physical':
-            model = PhysicalOutput.model_validate(output)
-            payload = model.model_dump(mode='json')
-            return self.checkpoint_runner(
-                payload['tgraph_physical'],
-                payload['physical_checkpoints'],
-                str(self.artifact_store.root / 'physical' / 'artifacts'),
-            )
+            if stage_id == 'physical':
+                model = PhysicalOutput.model_validate(output)
+                payload = model.model_dump(mode='json')
+                return self.checkpoint_runner(
+                    payload['tgraph_physical'],
+                    payload['physical_checkpoints'],
+                    str(self.artifact_store.root / 'physical' / 'artifacts'),
+                )
 
         return None
 
