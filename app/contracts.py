@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class StageMode(str, Enum):
+    CHECK_AUTHOR = "check_author"
+    GRAPH_BUILDER = "graph_builder"
+    REPAIR = "repair"
+
+
+class FailureType(str, Enum):
+    CONSTRAINT_PARSE_ERROR = "constraint_parse_error"
+    CHECKPOINT_AUTHORING_ERROR = "checkpoint_authoring_error"
+    GRAPH_REPAIRABLE_ERROR = "graph_repairable_error"
+    STAGE_BOUNDARY_ERROR = "stage_boundary_error"
 
 
 class ArtifactSelector(BaseModel):
-    stage: Literal["ground", "logical", "physical"]
+    stage: Literal["runtime", "ground", "logical", "physical"]
     name: str
     required: bool = True
 
@@ -33,9 +47,24 @@ class ValidationIssue(BaseModel):
     code: str
     message: str
     severity: Literal["error", "warning"]
-    scope: Literal["node_ids", "topology"]
+    scope: Literal["topology", "node", "port", "link", "patch", "intent"]
     targets: list[str] = Field(default_factory=list)
     json_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def normalize_scope(cls, value: str) -> str:
+        aliases = {
+            "nodes": "node",
+            "node_ids": "node",
+            "ports": "port",
+            "port_ids": "port",
+            "links": "link",
+            "link_ids": "link",
+        }
+        if isinstance(value, str):
+            return aliases.get(value.strip().lower(), value)
+        return value
 
 
 class ValidationReport(BaseModel):

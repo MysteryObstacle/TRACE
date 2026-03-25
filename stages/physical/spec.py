@@ -13,6 +13,6 @@ SPEC = StageSpec(
         ArtifactSelector(stage="logical", name="tgraph_logical"),
     ],
     output_model=PhysicalOutput.__name__,
-    max_rounds=3,
+    max_rounds=5,
     repair_mode="patch",
 )

@@ -9,6 +9,15 @@ from artifacts.store import ArtifactStore
 from stages.registry import STAGE_SPECS
 
 
+def test_logical_prompt_prefers_semantic_patch_ops_and_link_queries() -> None:
+    prompt_text = Path('prompts/logical.md').read_text(encoding='utf-8')
+
+    assert 'connect_nodes' in prompt_text
+    assert 'disconnect_nodes' in prompt_text
+    assert 'get_link(link_id)' in prompt_text
+    assert 'list_links(node_id=None, port_id=None)' in prompt_text
+
+
 def test_logical_stage_runs_check_author_then_graph_builder() -> None:
     temp_dir = Path('.test_tmp/logical-split-round')
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -55,15 +64,9 @@ def test_logical_stage_runs_check_author_then_graph_builder() -> None:
                             ],
                             'logical_patch_ops': [
                                 {
-                                    'op': 'add_node',
-                                    'value': {
-                                        'id': 'PLC1',
-                                        'type': 'computer',
-                                        'label': 'PLC1',
-                                        'ports': [],
-                                        'image': None,
-                                        'flavor': None,
-                                    },
+                                    'op': 'batch_update_nodes',
+                                    'node_ids': ['PLC1'],
+                                    'changes': {'label': 'PLC1'},
                                 }
                             ],
                             'logical_validator_script': None,

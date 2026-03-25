@@ -1,2 +1,3 @@
-agent_backend: fake
+agent_backend: langchain
 langsmith_enabled: false
+langsmith_project: trace-iac

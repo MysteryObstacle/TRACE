@@ -1,4 +1,4 @@
-from app.contracts import ArtifactSelector, ValidationIssue
+from app.contracts import ArtifactSelector, FailureType, StageMode, ValidationIssue
 
 
 def test_artifact_selector_round_trips() -> None:
@@ -21,3 +21,35 @@ def test_validation_issue_defaults_are_stable() -> None:
 
     assert issue.targets == []
     assert issue.json_paths == []
+
+
+def test_validation_issue_accepts_tgraph_scopes() -> None:
+    issue = ValidationIssue(
+        code="duplicate_port_id",
+        message="port id duplicated",
+        severity="error",
+        scope="port",
+    )
+
+    assert issue.scope == "port"
+    assert issue.targets == []
+    assert issue.json_paths == []
+
+
+def test_validation_issue_normalizes_plural_scope_aliases() -> None:
+    issue = ValidationIssue(
+        code="wrong_node_type",
+        message="node type mismatch",
+        severity="error",
+        scope="nodes",
+    )
+
+    assert issue.scope == "node"
+
+
+def test_failure_type_values_are_stable() -> None:
+    assert FailureType.STAGE_BOUNDARY_ERROR.value == "stage_boundary_error"
+
+
+def test_stage_mode_values_are_stable() -> None:
+    assert StageMode.REPAIR.value == "repair"

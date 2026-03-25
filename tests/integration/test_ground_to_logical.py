@@ -22,8 +22,25 @@ def test_logical_stage_retries_after_validation_failure() -> None:
                     stage_id='ground',
                     output={
                         'node_patterns': ['PLC[1..2]', 'HMI1'],
-                        'logical_constraints': [],
-                        'physical_constraints': [],
+                        'logical_constraints': [
+                            {
+                                'id': 'lc1',
+                                'scope': 'topology',
+                                'text': 'The whole logical topology must be connected.',
+                            },
+                            {
+                                'id': 'lc2',
+                                'scope': 'node_ids',
+                                'text': 'PLC[1..2] must connect to HMI1 through HMI1.',
+                            },
+                        ],
+                        'physical_constraints': [
+                            {
+                                'id': 'pc1',
+                                'scope': 'node_ids',
+                                'text': 'PLC[1..2] and HMI1 must use an OpenPLC-compatible image.',
+                            }
+                        ],
                     },
                 ),
                 'logical': [
@@ -39,7 +56,7 @@ def test_logical_stage_retries_after_validation_failure() -> None:
                                     'script_ref': None,
                                 }
                             ],
-                            'tgraph_logical': {'nodes': [{'id': 'PLC1'}]},
+                            'tgraph_logical': {'profile': 'logical.v1', 'nodes': []},
                             'logical_validator_script': None,
                         },
                     ),
@@ -55,7 +72,7 @@ def test_logical_stage_retries_after_validation_failure() -> None:
                                     'script_ref': None,
                                 }
                             ],
-                            'tgraph_logical': {'nodes': [{'id': 'PLC1'}], 'edges': []},
+                            'tgraph_logical': {'profile': 'logical.v1', 'nodes': [], 'links': []},
                             'logical_validator_script': None,
                         },
                     ),
@@ -72,7 +89,7 @@ def test_logical_stage_retries_after_validation_failure() -> None:
                                 'script_ref': None,
                             }
                         ],
-                        'tgraph_physical': {'nodes': [{'id': 'PLC1'}], 'edges': []},
+                        'tgraph_physical': {'profile': 'taal.default.v1', 'nodes': [], 'links': []},
                         'physical_validator_script': None,
                     },
                 ),
@@ -92,3 +109,19 @@ def test_logical_stage_retries_after_validation_failure() -> None:
         assert result.validation_attempts['logical'] == 2
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_ground_stage_contract_examples_use_explicit_node_sets() -> None:
+    prompt_text = Path('prompts/ground.md').read_text(encoding='utf-8')
+
+    assert '"text": "All PLC nodes' not in prompt_text
+    assert 'PLC[1..6]' in prompt_text
+
+
+def test_ground_prompt_declares_four_constraint_families() -> None:
+    prompt_text = Path('prompts/ground.md').read_text(encoding='utf-8')
+
+    assert 'graph-level constraints' in prompt_text
+    assert 'set-level constraints' in prompt_text
+    assert 'relationship-level constraints' in prompt_text
+    assert 'physical constraints' in prompt_text

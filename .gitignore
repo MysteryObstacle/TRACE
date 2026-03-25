@@ -12,3 +12,7 @@ pytest_temp/
 .worktrees/
 runs/
 .test_tmp/
+.pytest_run*/
+.pytest_verify*/
+.test_runs/
+.test_runs_stream/

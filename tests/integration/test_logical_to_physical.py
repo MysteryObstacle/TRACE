@@ -22,8 +22,25 @@ def test_physical_stage_reads_ground_and_logical_outputs() -> None:
                     stage_id='ground',
                     output={
                         'node_patterns': ['PLC[1..2]', 'HMI1'],
-                        'logical_constraints': [],
-                        'physical_constraints': [],
+                        'logical_constraints': [
+                            {
+                                'id': 'lc1',
+                                'scope': 'topology',
+                                'text': 'The whole logical topology must be connected.',
+                            },
+                            {
+                                'id': 'lc2',
+                                'scope': 'node_ids',
+                                'text': 'PLC[1..2] must connect to HMI1 through HMI1.',
+                            },
+                        ],
+                        'physical_constraints': [
+                            {
+                                'id': 'pc1',
+                                'scope': 'node_ids',
+                                'text': 'PLC[1..2] and HMI1 must use an OpenPLC-compatible image.',
+                            }
+                        ],
                     },
                 ),
                 'logical': AgentResult(
@@ -38,7 +55,7 @@ def test_physical_stage_reads_ground_and_logical_outputs() -> None:
                                 'script_ref': None,
                             }
                         ],
-                        'tgraph_logical': {'nodes': [{'id': 'PLC1'}], 'edges': []},
+                        'tgraph_logical': {'profile': 'logical.v1', 'nodes': [], 'links': []},
                         'logical_validator_script': None,
                     },
                 ),
@@ -54,7 +71,7 @@ def test_physical_stage_reads_ground_and_logical_outputs() -> None:
                                 'script_ref': None,
                             }
                         ],
-                        'tgraph_physical': {'nodes': [{'id': 'PLC1'}], 'edges': []},
+                        'tgraph_physical': {'profile': 'taal.default.v1', 'nodes': [], 'links': []},
                         'physical_validator_script': None,
                     },
                 ),

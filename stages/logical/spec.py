@@ -11,6 +11,6 @@ SPEC = StageSpec(
         ArtifactSelector(stage="ground", name="logical_constraints"),
     ],
     output_model=LogicalOutput.__name__,
-    max_rounds=3,
+    max_rounds=5,
     repair_mode="patch",
 )

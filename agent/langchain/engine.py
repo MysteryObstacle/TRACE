@@ -9,3 +9,10 @@ class LangChainEngine:
 
     def invoke(self, messages: list[Any]) -> Any:
         return self.model.invoke(messages)
+
+    def stream(self, messages: list[Any]):
+        stream = getattr(self.model, 'stream', None)
+        if callable(stream):
+            yield from stream(messages)
+            return
+        yield self.model.invoke(messages)

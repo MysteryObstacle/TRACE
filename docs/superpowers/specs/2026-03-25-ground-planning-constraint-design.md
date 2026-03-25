@@ -116,7 +116,47 @@ The design uses constrained natural language with four allowed semantic families
 
 These are not separate persisted lists. They remain mixed inside `logical_constraints` or `physical_constraints` as appropriate.
 
-### 6.1 Node-targeting rule
+Every emitted constraint must clearly belong to exactly one family.
+
+Within the current schema, the intended mapping is:
+
+- `logical_constraints` may contain only:
+  - graph-level constraints
+  - set-level constraints
+  - relationship-level constraints
+- `physical_constraints` may contain only:
+  - physical constraints
+
+### 6.1 Graph-level rule
+
+Graph-level constraints describe properties of the topology as a whole rather than a particular node set.
+
+Typical examples:
+
+- `The whole logical topology must be connected.`
+- `The whole topology must contain 50 nodes.`
+
+Graph-level constraints are allowed to omit explicit node IDs only when the property is genuinely about the whole graph and can be checked directly at graph scope.
+
+They must not be used as a hiding place for under-planned structure. For example:
+
+- `The topology must be divided into four segments.`
+
+is not acceptable as a final graph-level constraint unless the segmentation intent is already reduced to executable node-set, routing, CIDR, or isolation rules elsewhere.
+
+### 6.2 Set-level rule
+
+Set-level constraints target one node, an explicit node list, or a compact node range and impose non-path properties on that set.
+
+Typical examples:
+
+- `PLC[1..3]/DCS1 must use cidr 10.10.30.0/24.`
+- `R_CORE and FIREWALL must use transit cidr 10.0.0.0/30 between them.`
+- `WEB/PC1/PC2 must not be in the same subnet as PLC1.`
+
+Set-level constraints are the main landing place for grounded addressing and segmentation rules after abstract goals have been refined.
+
+### 6.3 Node-targeting rule
 
 Any node-targeting constraint must reference one of the following:
 
@@ -132,7 +172,7 @@ The following style is forbidden:
 
 Those phrases are too ambiguous for deterministic downstream processing.
 
-### 6.2 Relationship wording rule
+### 6.4 Relationship wording rule
 
 Topology backbones and path requirements should use stable sentence forms such as:
 
@@ -146,7 +186,9 @@ The exact wording can vary slightly, but the sentence must clearly name:
 - the intermediary node or node set
 - the destination node or node set
 
-### 6.3 Addressing rule
+Relationship-level constraints should be used when the important requirement is a path, adjacency prohibition, or explicit structural role in the backbone.
+
+### 6.5 Addressing rule
 
 Address planning belongs in `logical_constraints`, not in a separate artifact.
 
@@ -157,7 +199,9 @@ However, addressing must still be grounded through explicit node or node-set ref
 
 High-level addressing goals such as `the topology must have four logical subnets` are not enough by themselves unless they are already reducible to graph-checkable rules.
 
-### 6.4 Physical wording rule
+In practice, most grounded addressing statements become set-level constraints.
+
+### 6.6 Physical wording rule
 
 Physical constraints should reference explicit node IDs or node sets, for example:
 
