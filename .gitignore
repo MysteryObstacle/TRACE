@@ -8,5 +8,7 @@ pytest_temp/
 *.egg-info/
 .coverage
 .venv/
+.env
+.worktrees/
 runs/
 .test_tmp/
