@@ -204,20 +204,3 @@ At the moment, the runtime behaves like this:
 
 4. `translate_stub`
 - currently a no-op placeholder
-
-## TODO
-
-### Capability layer
-
-- [x] Make `.env` model settings drive default model invocation so `qwen-plus-1220` can call DashScope in the normal execution path.
-- [ ] Replace `translate_stub()` in [app/tplan_runner.py](/d:/Paper/10.Domain%20Agent/Trace/app/tplan_runner.py) with a real translation stage, including post-`physical` artifact output strategy.
-- [ ] Implement full checkpoint-level `resume` semantics instead of the current minimal state reload.
-- [x] Replace the current tracing shell with a complete LangSmith-backed implementation.
-- [ ] Flesh out `tools/knowledge/*` and `tools/tgraph/*` so stages can use real retrieval and graph manipulation helpers.
-- [ ] Expand patch and repair support beyond the current minimal graph operations to a full repair system.
-- [ ] Move generated Python validator execution toward a stronger sandbox or isolation model.
-
-### Runtime and quality
-
-- [ ] Persist richer run metadata such as timeline events, per-attempt validation reports, and patch histories.
-- [ ] Add more realistic integration tests that run the real LangChain facade against controlled stubs or fixtures.
