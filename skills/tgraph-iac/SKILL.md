@@ -30,7 +30,7 @@ python <skill>/scripts/tgraph_export.py --trace-root D:/Projects/Trace --artifac
 
 - Do not directly overwrite a full artifact unless the user explicitly asks for a rebuild.
 - Do not use RFC JSON Patch paths. Use `graph_patch`, `checkpoint_patch`, and `validator_patch`.
-- Create ports only through `ensure_link`.
+- Prefer `ensure_link` when wiring endpoints; use `ensure_port` only for deliberate dangling interfaces.
 - Use `ensure_*` operations for idempotent generation and repair.
 - Use `remove_*` operations only when the destructive intent is clear.
 - Leave `reconnect` false unless the requested fix explicitly rewires an existing port.

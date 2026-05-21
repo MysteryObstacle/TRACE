@@ -1,6 +1,12 @@
 # TGraph IR
 
-TGraph artifacts are stage envelopes around a canonical graph.
+Standalone TGraph JSON is the canonical graph document:
+
+```json
+{"stage": "logical", "nodes": [], "links": []}
+```
+
+TRACE artifacts are compatibility envelopes around stage-specific working graphs. The skill scripts accept these envelopes for inspect, patch, and validate operations.
 
 Logical envelope:
 
@@ -50,4 +56,6 @@ Link shape:
 ```
 
 Link ids are canonicalized from sorted endpoint ports. `from_node` and `to_node` are inferred during normalization. Do not invent alternate fields such as `source`, `target`, `a`, `b`, `connected`, or nested endpoint objects inside the graph itself.
+
+`tgraph_export.py --target tgraph-json` writes the standalone canonical document, not the TRACE compatibility envelope.
 

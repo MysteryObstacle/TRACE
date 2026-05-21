@@ -2,7 +2,7 @@
 
 V1 supports:
 
-- `tgraph-json`: writes normalized TGraph JSON as `tgraph.json`.
+- `tgraph-json`: writes normalized standalone TGraph JSON as `tgraph.json`.
 
 Future targets may include:
 

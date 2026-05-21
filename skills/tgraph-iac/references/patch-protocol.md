@@ -52,6 +52,20 @@ Remove a node:
 
 `ensure_link` rejects already-connected endpoint ports unless `reconnect` is true. With `reconnect: true`, old incident links are removed before the requested link is created.
 
+Ensure a standalone port without wiring it yet:
+
+```json
+{"op": "ensure_port", "node": "R1", "port": "R1_p1", "ip": "10.0.0.1", "cidr": "10.0.0.0/30"}
+```
+
+Remove a port:
+
+```json
+{"op": "remove_port", "node": "R1", "port": "R1_p1", "cascade": false}
+```
+
+`remove_port` rejects incident links unless `cascade` is true.
+
 ## Checkpoint Operations
 
 ```json
