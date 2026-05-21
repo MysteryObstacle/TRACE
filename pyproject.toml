@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 trace = "trace_cli:app"
+tgraph = "tgraph.cli.main:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

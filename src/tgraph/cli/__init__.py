@@ -1,0 +1,2 @@
+"""TGraph command-line interface."""
+
