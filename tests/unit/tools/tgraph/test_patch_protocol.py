@@ -106,6 +106,37 @@ def test_ensure_link_creates_missing_ports_and_link():
     assert result["diff"]["links_added"] == ["R1_p1--SW1_p1"]
 
 
+def test_ensure_port_uses_standalone_graph_patch_operation():
+    artifact = _logical_artifact(
+        {
+            "profile": "logical.v1",
+            "nodes": [{"id": "R1", "type": "router", "label": "R1", "ports": []}],
+            "links": [],
+        }
+    )
+
+    result = apply_artifact_patch(
+        artifact,
+        {
+            "graph_patch": [
+                {
+                    "op": "ensure_port",
+                    "node": "R1",
+                    "port": "R1_p1",
+                    "ip": "10.0.0.1",
+                    "cidr": "10.0.0.0/30",
+                }
+            ],
+            "options": {"stage": "logical", "validate": ["f1", "f2", "f3"], "include_artifact": True},
+        },
+    )
+
+    ports = result["artifact"]["tgraph_logical"]["nodes"][0]["ports"]
+    assert result["ok"] is True
+    assert ports == [{"id": "R1_p1", "ip": "10.0.0.1", "cidr": "10.0.0.0/30"}]
+    assert result["diff"]["ports_added"] == ["R1.R1_p1"]
+
+
 def test_ensure_link_is_idempotent_and_updates_addressing():
     artifact = _logical_artifact(
         {
@@ -229,6 +260,35 @@ def test_remove_link_keeps_ports():
     assert result["ok"] is True
     assert result["artifact"]["tgraph_logical"]["links"] == []
     assert result["artifact"]["tgraph_logical"]["nodes"][0]["ports"] == [{"id": "R1_p1", "ip": "10.0.0.1", "cidr": "10.0.0.0/30"}]
+
+
+def test_remove_port_uses_standalone_graph_patch_operation():
+    artifact = _logical_artifact(
+        {
+            "profile": "logical.v1",
+            "nodes": [
+                {
+                    "id": "R1",
+                    "type": "router",
+                    "label": "R1",
+                    "ports": [{"id": "R1_p1", "ip": "10.0.0.1", "cidr": "10.0.0.0/30"}],
+                }
+            ],
+            "links": [],
+        }
+    )
+
+    result = apply_artifact_patch(
+        artifact,
+        {
+            "graph_patch": [{"op": "remove_port", "node": "R1", "port": "R1_p1"}],
+            "options": {"stage": "logical", "validate": ["f1", "f2", "f3"], "include_artifact": True},
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["artifact"]["tgraph_logical"]["nodes"][0]["ports"] == []
+    assert result["diff"]["ports_removed"] == ["R1.R1_p1"]
 
 
 def test_remove_node_cascade_removes_incident_links():

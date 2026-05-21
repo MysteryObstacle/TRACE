@@ -153,4 +153,4 @@ def test_export_script_writes_tgraph_json_file(tmp_path):
     assert result.returncode == 0
     assert stdout["ok"] is True
     assert stdout["files"] == [{"path": str(out_dir / "tgraph.json")}]
-    assert exported == {"profile": "logical.v1", "nodes": [], "links": []}
+    assert exported == {"stage": "logical", "nodes": [], "links": []}

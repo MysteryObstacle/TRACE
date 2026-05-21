@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from trace.tools.tgraph.model import TGraphJSON, ensure_tgraph_json
+from tgraph import normalize_graph
+
+from trace.tools.tgraph.model import (
+    TGraphJSON,
+    ensure_tgraph_json,
+    from_standalone_graph,
+    to_standalone_graph,
+)
 
 
 class TGraphRuntime:
@@ -11,25 +18,10 @@ class TGraphRuntime:
 
     @classmethod
     def from_json(cls, payload: TGraphJSON | dict[str, Any]) -> "TGraphRuntime":
-        graph = ensure_tgraph_json(payload).model_dump(mode="json")
-        port_owner: dict[str, str] = {}
-        for node in graph.get("nodes", []):
-            for port in node.get("ports", []):
-                port_owner[port["id"]] = node["id"]
-
-        normalized_links: list[dict[str, Any]] = []
-        for link in graph.get("links", []):
-            item = dict(link)
-            endpoint_a, endpoint_b = sorted((item["from_port"], item["to_port"]))
-            item["from_port"] = endpoint_a
-            item["to_port"] = endpoint_b
-            item["id"] = f"{endpoint_a}--{endpoint_b}"
-            item["from_node"] = port_owner.get(endpoint_a)
-            item["to_node"] = port_owner.get(endpoint_b)
-            normalized_links.append(item)
-
-        graph["links"] = normalized_links
-        return cls(TGraphJSON.model_validate(graph).model_dump(mode="json"))
+        graph = ensure_tgraph_json(payload)
+        standalone = normalize_graph(to_standalone_graph(graph))
+        normalized = from_standalone_graph(standalone, profile=graph.profile)
+        return cls(normalized.model_dump(mode="json"))
 
     def to_json(self) -> dict[str, Any]:
         return TGraphJSON.model_validate(self._payload).model_dump(mode="json")

@@ -22,6 +22,8 @@ def test_export_tgraph_json_returns_normalized_graph():
     assert result["ok"] is True
     assert result["files"][0]["path"] == "tgraph.json"
     exported = json.loads(result["files"][0]["content"])
+    assert exported["stage"] == "logical"
+    assert "profile" not in exported
     assert exported["links"][0]["id"] == "p1--p2"
 
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable
 
+from tgraph import apply_patch as apply_standalone_patch
+
+from trace.tools.tgraph.model import from_standalone_graph, to_standalone_graph
 from trace.tools.tgraph.runtime import TGraphRuntime
 from trace.tools.tgraph.validate.f1_format import f1_format
 from trace.tools.tgraph.validate.f2_schema import f2_schema
@@ -76,6 +79,7 @@ def apply_artifact_patch(
             candidate[graph_field],
             _ops_list(patch.get("graph_patch"), "graph_patch"),
             diff,
+            stage=str(selected_stage),
         )
         accepted_ops.extend(graph_accepted)
         rejected_ops.extend(graph_rejected)
@@ -137,116 +141,89 @@ def _apply_graph_patch(
     graph: dict[str, Any],
     ops: list[dict[str, Any]],
     diff: dict[str, Any],
+    *,
+    stage: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-    for index, op in enumerate(ops):
-        name = op.get("op")
+    adapted_ops: list[dict[str, Any]] = []
+    for index, raw_op in enumerate(ops):
+        name = raw_op.get("op")
         try:
-            if name == "ensure_node":
-                _ensure_node(graph, op, diff)
-            elif name == "ensure_link":
-                _ensure_link(graph, op, diff)
-            elif name == "remove_link":
-                _remove_link(graph, op, diff)
-            elif name == "remove_node":
-                _remove_node(graph, op, diff)
-            else:
-                raise PatchError("patch_schema_error", f"unknown graph op: {name}")
-            accepted.append({"section": "graph_patch", "index": index, "op": str(name)})
+            adapted_ops.append(_adapt_graph_op(raw_op))
         except PatchError as exc:
-            rejected.append({"section": "graph_patch", "index": index, "op": name, "error": exc.to_json()})
-            break
-    return accepted, rejected
+            return [], [{"section": "graph_patch", "index": index, "op": name, "error": exc.to_json()}]
+
+    if not adapted_ops:
+        return [], []
+
+    standalone = to_standalone_graph(graph, stage=stage)
+    result = apply_standalone_patch(
+        standalone,
+        {"graph_patch": adapted_ops},
+        validate=False,
+        include_graph=True,
+    )
+
+    accepted = list(result.accepted_ops)
+    rejected = [_translate_rejected_op(item) for item in result.rejected_ops]
+    if not result.ok:
+        if rejected:
+            return accepted, rejected
+        error = _translate_graph_error(result.error or {"code": "patch_error", "message": "graph patch failed"})
+        return accepted, [{"section": "graph_patch", "index": 0, "op": None, "error": error}]
+
+    if result.graph is None:
+        return accepted, [
+            {
+                "section": "graph_patch",
+                "index": 0,
+                "op": None,
+                "error": {"code": "patch_error", "message": "graph patch did not return a candidate graph"},
+            }
+        ]
+
+    _merge_graph_diff(diff, result.diff)
+    profile = str(graph.get("profile") or "taal.default.v1")
+    updated = from_standalone_graph(result.graph, profile=profile).model_dump(mode="json")
+    graph.clear()
+    graph.update(updated)
+    return accepted, []
 
 
-def _ensure_node(graph: dict[str, Any], op: dict[str, Any], diff: dict[str, Any]) -> None:
-    node_id = _required_str(op, "id")
-    nodes = graph.setdefault("nodes", [])
-    existing = _find_node(graph, node_id)
-    allowed = {"type", "label", "image", "flavor"}
-    if existing is None:
-        node_type = _required_str(op, "type")
-        label = _required_str(op, "label")
-        node = {
-            "id": node_id,
-            "type": node_type,
-            "label": label,
-            "ports": [],
-            "image": op.get("image"),
-            "flavor": op.get("flavor"),
-        }
-        nodes.append(node)
-        _append_unique(diff["nodes_added"], node_id)
-        return
-
-    changed = False
-    for key in allowed:
-        if key in op and existing.get(key) != op.get(key):
-            existing[key] = op.get(key)
-            changed = True
-    if changed:
-        _append_unique(diff["nodes_updated"], node_id)
+def _adapt_graph_op(op: dict[str, Any]) -> dict[str, Any]:
+    name = op.get("op")
+    if name == "set_stage":
+        raise PatchError("patch_schema_error", "set_stage is only supported by standalone TGraph documents")
+    if name not in {"ensure_node", "ensure_port", "ensure_link", "remove_node", "remove_port", "remove_link"}:
+        raise PatchError("patch_schema_error", f"unknown graph op: {name}")
+    adapted = dict(op)
+    if name == "remove_node" and "cascade" not in adapted:
+        adapted["cascade"] = True
+    return adapted
 
 
-def _ensure_link(graph: dict[str, Any], op: dict[str, Any], diff: dict[str, Any]) -> None:
-    endpoint_a = _endpoint(op.get("a"), "a")
-    endpoint_b = _endpoint(op.get("b"), "b")
-    port_a = endpoint_a["port"]
-    port_b = endpoint_b["port"]
-    if port_a == port_b:
-        raise PatchError("op_conflict", "link endpoints must use two different ports")
-
-    reconnect = bool(op.get("reconnect", False))
-    _ensure_endpoint_port(graph, endpoint_a, diff)
-    _ensure_endpoint_port(graph, endpoint_b, diff)
-
-    links = graph.setdefault("links", [])
-    pair = {port_a, port_b}
-    existing_target = _find_link_between(graph, port_a, port_b)
-    incident = [
-        link
-        for link in links
-        if (link.get("from_port") in pair or link.get("to_port") in pair) and set(_link_ports(link)) != pair
-    ]
-    if incident and not reconnect:
-        raise PatchError("op_conflict", f"one or more endpoint ports are already connected: {[link.get('id') for link in incident]}")
-    if incident and reconnect:
-        for link in list(incident):
-            _delete_link_object(graph, link, diff)
-        links = graph.setdefault("links", [])
-
-    _update_endpoint_addressing(graph, endpoint_a, diff)
-    _update_endpoint_addressing(graph, endpoint_b, diff)
-
-    if existing_target is None:
-        links.append({"id": _link_id(port_a, port_b), "from_port": port_a, "to_port": port_b})
-        _append_unique(diff["links_added"], _link_id(port_a, port_b))
+def _merge_graph_diff(diff: dict[str, Any], graph_diff: dict[str, Any]) -> None:
+    for key, value in graph_diff.items():
+        if isinstance(value, list):
+            target = diff.setdefault(key, [])
+            for item in value:
+                _append_unique(target, str(item))
+        elif isinstance(value, bool):
+            diff[key] = bool(diff.get(key, False) or value)
+        else:
+            diff[key] = value
 
 
-def _remove_link(graph: dict[str, Any], op: dict[str, Any], diff: dict[str, Any]) -> None:
-    link_id = _required_str(op, "id")
-    for link in list(graph.get("links", [])):
-        if link.get("id") == link_id:
-            _delete_link_object(graph, link, diff)
-            return
-    raise PatchError("op_conflict", f"unknown link id: {link_id}")
+def _translate_rejected_op(item: dict[str, Any]) -> dict[str, Any]:
+    translated = dict(item)
+    translated["error"] = _translate_graph_error(dict(translated.get("error") or {}))
+    return translated
 
 
-def _remove_node(graph: dict[str, Any], op: dict[str, Any], diff: dict[str, Any]) -> None:
-    node_id = _required_str(op, "id")
-    cascade = bool(op.get("cascade", True))
-    node = _find_node(graph, node_id)
-    if node is None:
-        raise PatchError("op_conflict", f"unknown node id: {node_id}")
-    port_ids = {port.get("id") for port in node.get("ports", [])}
-    incident = [link for link in graph.get("links", []) if link.get("from_port") in port_ids or link.get("to_port") in port_ids]
-    if not cascade and (node.get("ports") or incident):
-        raise PatchError("op_conflict", f"node has ports or incident links: {node_id}")
-    for link in list(incident):
-        _delete_link_object(graph, link, diff)
-    graph["nodes"] = [item for item in graph.get("nodes", []) if item.get("id") != node_id]
-    _append_unique(diff["nodes_removed"], node_id)
+def _translate_graph_error(error: dict[str, Any]) -> dict[str, Any]:
+    translated = dict(error)
+    if translated.get("code") == "patch_conflict":
+        translated["code"] = "op_conflict"
+    return translated
 
 
 def _apply_checkpoint_patch(
@@ -358,90 +335,11 @@ def _run_validators(tgraph: dict[str, Any], levels: list[str], **kwargs: Any) ->
     return ValidationReport(ok=not any(item.severity == "error" for item in issues), issues=issues)
 
 
-def _ensure_endpoint_port(graph: dict[str, Any], endpoint: dict[str, str], diff: dict[str, Any]) -> None:
-    port_id = endpoint["port"]
-    node_id = endpoint.get("node")
-    owner = _port_owner_map(graph).get(port_id)
-    if owner is not None:
-        if node_id and owner != node_id:
-            raise PatchError("op_conflict", f"port {port_id} belongs to {owner}, not {node_id}")
-        return
-    if not node_id:
-        raise PatchError("op_conflict", f"unknown port id {port_id}; endpoint must include node")
-    node = _find_node(graph, node_id)
-    if node is None:
-        raise PatchError("op_conflict", f"unknown node id: {node_id}")
-    node.setdefault("ports", []).append({"id": port_id, "ip": endpoint.get("ip", ""), "cidr": endpoint.get("cidr", "")})
-    _append_unique(diff["ports_added"], f"{node_id}.{port_id}")
-
-
-def _update_endpoint_addressing(graph: dict[str, Any], endpoint: dict[str, str], diff: dict[str, Any]) -> None:
-    port_id = endpoint["port"]
-    owner = _port_owner_map(graph).get(port_id)
-    if owner is None:
-        return
-    node = _find_node(graph, owner)
-    if node is None:
-        return
-    for port in node.get("ports", []):
-        if port.get("id") != port_id:
-            continue
-        changed = False
-        for key in ("ip", "cidr"):
-            if key in endpoint and port.get(key, "") != endpoint.get(key, ""):
-                port[key] = endpoint.get(key, "")
-                changed = True
-        if changed:
-            _append_unique(diff["ports_updated"], f"{owner}.{port_id}")
-        return
-
-
-def _find_node(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
-    for node in graph.get("nodes", []):
-        if node.get("id") == node_id:
-            return node
-    return None
-
-
 def _find_checkpoint(checkpoints: list[dict[str, Any]], checkpoint_id: str) -> dict[str, Any] | None:
     for item in checkpoints:
         if item.get("id") == checkpoint_id:
             return item
     return None
-
-
-def _find_link_between(graph: dict[str, Any], port_a: str, port_b: str) -> dict[str, Any] | None:
-    target = {port_a, port_b}
-    for link in graph.get("links", []):
-        if set(_link_ports(link)) == target:
-            return link
-    return None
-
-
-def _delete_link_object(graph: dict[str, Any], link: dict[str, Any], diff: dict[str, Any]) -> None:
-    graph["links"] = [item for item in graph.get("links", []) if item is not link]
-    _append_unique(diff["links_removed"], str(link.get("id") or _link_id(*_link_ports(link))))
-
-
-def _port_owner_map(graph: dict[str, Any]) -> dict[str, str]:
-    owners: dict[str, str] = {}
-    for node in graph.get("nodes", []):
-        for port in node.get("ports", []):
-            owners[str(port.get("id"))] = str(node.get("id"))
-    return owners
-
-
-def _endpoint(value: Any, label: str) -> dict[str, str]:
-    if not isinstance(value, dict):
-        raise PatchError("patch_schema_error", f"endpoint {label} must be an object")
-    endpoint = dict(value)
-    endpoint["port"] = _required_str(endpoint, "port")
-    if "node" in endpoint and endpoint["node"] is not None:
-        endpoint["node"] = str(endpoint["node"])
-    for key in ("ip", "cidr"):
-        if key in endpoint and endpoint[key] is not None:
-            endpoint[key] = str(endpoint[key])
-    return endpoint
 
 
 def _ops_list(value: Any, field_name: str) -> list[dict[str, Any]]:
@@ -472,15 +370,6 @@ def _required_str(payload: dict[str, Any], key: str) -> str:
     return str(value)
 
 
-def _link_ports(link: dict[str, Any]) -> tuple[str, str]:
-    return str(link.get("from_port")), str(link.get("to_port"))
-
-
-def _link_id(port_a: str, port_b: str) -> str:
-    a, b = sorted((port_a, port_b))
-    return f"{a}--{b}"
-
-
 def _append_unique(target: list[str], value: str) -> None:
     if value not in target:
         target.append(value)
@@ -495,6 +384,8 @@ def _empty_diff() -> dict[str, Any]:
         "links_removed": [],
         "ports_added": [],
         "ports_updated": [],
+        "ports_removed": [],
+        "stage_changed": False,
         "checkpoints_added": [],
         "checkpoints_updated": [],
         "checkpoints_removed": [],

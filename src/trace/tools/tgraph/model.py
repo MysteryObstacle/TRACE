@@ -79,7 +79,7 @@ def normalize_tgraph_json(graph: TGraphJSON | dict[str, Any]) -> TGraphJSON:
 def to_standalone_graph(
     graph: TGraphJSON | dict[str, Any],
     *,
-    stage: GraphStage = "logical",
+    stage: GraphStage | str = "logical",
 ) -> StandaloneTGraph:
     """Convert a TRACE compatibility graph into the standalone TGraph IR."""
     trace_graph = ensure_tgraph_json(graph)
