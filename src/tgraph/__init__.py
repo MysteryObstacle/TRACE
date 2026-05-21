@@ -15,6 +15,7 @@ from tgraph.io import dump_tgraph, load_tgraph
 from tgraph.operations.inspect import inspect_graph
 from tgraph.operations.patch import apply_patch
 from tgraph.operations.validate import validate_document, validate_graph
+from tgraph.targets import emit_target
 
 __all__ = [
     "FlavorSpec",
@@ -28,6 +29,7 @@ __all__ = [
     "DocumentError",
     "apply_patch",
     "dump_tgraph",
+    "emit_target",
     "ensure_stage",
     "inspect_graph",
     "load_tgraph",
