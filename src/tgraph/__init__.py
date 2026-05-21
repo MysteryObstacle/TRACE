@@ -12,6 +12,7 @@ from tgraph.core import (
     normalize_graph,
 )
 from tgraph.io import dump_tgraph, load_tgraph
+from tgraph.operations.inspect import inspect_graph
 from tgraph.operations.validate import validate_document, validate_graph
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "DocumentError",
     "dump_tgraph",
     "ensure_stage",
+    "inspect_graph",
     "load_tgraph",
     "normalize_graph",
     "validate_document",
