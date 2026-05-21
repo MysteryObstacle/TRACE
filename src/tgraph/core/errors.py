@@ -17,3 +17,7 @@ class TGraphError(Exception):
             payload["details"] = self.details
         return payload
 
+
+class DocumentError(TGraphError):
+    code = "document_error"
+
