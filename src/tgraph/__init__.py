@@ -13,6 +13,7 @@ from tgraph.core import (
 )
 from tgraph.io import dump_tgraph, load_tgraph
 from tgraph.operations.inspect import inspect_graph
+from tgraph.operations.patch import apply_patch
 from tgraph.operations.validate import validate_document, validate_graph
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "TGraph",
     "TGraphError",
     "DocumentError",
+    "apply_patch",
     "dump_tgraph",
     "ensure_stage",
     "inspect_graph",
