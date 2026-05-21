@@ -1,0 +1,4 @@
+interface:
+  display_name: "TGraph IaC"
+  short_description: "Generate, repair, validate, and export TGraph IaC artifacts."
+  default_prompt: "Use TGraph as an IaC intermediate representation. Inspect artifacts, apply declarative batch patches, validate, and export."

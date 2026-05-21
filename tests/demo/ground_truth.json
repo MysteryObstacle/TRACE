@@ -1,0 +1,156 @@
+{
+    "nodes": [
+      {
+        "id": "R_CORE",
+        "type": "router",
+        "label": "R-CORE",
+        "image": null,
+        "flavor": null,
+        "ports": [
+          { "id": "p_rcore_dmz", "ip": "10.10.10.1", "cidr": "10.10.10.0/24" },
+          { "id": "p_rcore_office", "ip": "10.10.20.1", "cidr": "10.10.20.0/24" },
+          { "id": "p_rcore_ot", "ip": "10.10.30.1", "cidr": "10.10.30.0/24" },
+          { "id": "p_rcore_mgmt", "ip": "10.10.40.1", "cidr": "10.10.40.0/24" },
+          { "id": "p_rcore_corefw", "ip": "10.0.0.1", "cidr": "10.0.0.0/30" },
+          { "id": "p_rcore_corebranch", "ip": "10.0.0.9", "cidr": "10.0.0.8/30" }
+        ]
+      },
+      {
+        "id": "R_BRANCH",
+        "type": "router",
+        "label": "R-BRANCH",
+        "image": null,
+        "flavor": null,
+        "ports": [
+          { "id": "p_rbranch_core", "ip": "10.0.0.10", "cidr": "10.0.0.8/30" },
+          { "id": "p_rbranch_branchlan", "ip": "10.20.20.1", "cidr": "10.20.20.0/24" }
+        ]
+      },
+  
+      { "id": "SW_DMZ", "type": "switch", "label": "SW-DMZ", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_dmz_web", "ip": "", "cidr": "10.10.10.0/24" },
+          { "id": "p_sw_dmz_core", "ip": "", "cidr": "10.10.10.0/24" }
+        ]
+      },
+      { "id": "SW_OFFICE", "type": "switch", "label": "SW-OFFICE", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_office_pc1", "ip": "", "cidr": "10.10.20.0/24" },
+          { "id": "p_sw_office_pc2", "ip": "", "cidr": "10.10.20.0/24" },
+          { "id": "p_sw_office_core", "ip": "", "cidr": "10.10.20.0/24" }
+        ]
+      },
+      { "id": "SW_OT", "type": "switch", "label": "SW-OT", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_ot_plc1", "ip": "", "cidr": "10.10.30.0/24" },
+          { "id": "p_sw_ot_core", "ip": "", "cidr": "10.10.30.0/24" }
+        ]
+      },
+      { "id": "SW_MGMT", "type": "switch", "label": "SW-MGMT", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_mgmt_admin", "ip": "", "cidr": "10.10.40.0/24" },
+          { "id": "p_sw_mgmt_core", "ip": "", "cidr": "10.10.40.0/24" }
+        ]
+      },
+  
+      { "id": "SW_CORE_FW", "type": "switch", "label": "SW-CORE-FW", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_corefw_core", "ip": "", "cidr": "10.0.0.0/30" },
+          { "id": "p_sw_corefw_fw", "ip": "", "cidr": "10.0.0.0/30" }
+        ]
+      },
+      { "id": "SW_FW_INET", "type": "switch", "label": "SW-FW-INET", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_fwinet_fw", "ip": "", "cidr": "10.0.0.4/30" },
+          { "id": "p_sw_fwinet_inet", "ip": "", "cidr": "10.0.0.4/30" }
+        ]
+      },
+      { "id": "SW_CORE_BRANCH", "type": "switch", "label": "SW-CORE-BRANCH", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_corebr_core", "ip": "", "cidr": "10.0.0.8/30" },
+          { "id": "p_sw_corebr_branch", "ip": "", "cidr": "10.0.0.8/30" }
+        ]
+      },
+      { "id": "SW_BRANCH", "type": "switch", "label": "SW-BRANCH", "image": null, "flavor": null,
+        "ports": [
+          { "id": "p_sw_branch_rbranch", "ip": "", "cidr": "10.20.20.0/24" },
+          { "id": "p_sw_branch_bpc1", "ip": "", "cidr": "10.20.20.0/24" }
+        ]
+      },
+  
+      { "id": "WEB", "type": "computer", "label": "WEB",
+        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "flavor": { "vcpu": 2, "ram": 2048, "disk": 20 },
+        "ports": [ { "id": "p_web0", "ip": "", "cidr": "" } ]
+      },
+      { "id": "PC1", "type": "computer", "label": "PC1",
+        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
+        "ports": [ { "id": "p_pc1_0", "ip": "", "cidr": "" } ]
+      },
+      { "id": "PC2", "type": "computer", "label": "PC2",
+        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
+        "ports": [ { "id": "p_pc2_0", "ip": "", "cidr": "" } ]
+      },
+      { "id": "PLC1", "type": "computer", "label": "PLC1",
+        "image": { "id": "img-tiny-linux", "name": "tiny-linux" },
+        "flavor": { "vcpu": 1, "ram": 512, "disk": 5 },
+        "ports": [ { "id": "p_plc1_0", "ip": "", "cidr": "" } ]
+      },
+      { "id": "ADMIN", "type": "computer", "label": "ADMIN",
+        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "flavor": { "vcpu": 2, "ram": 2048, "disk": 20 },
+        "ports": [ { "id": "p_admin0", "ip": "", "cidr": "" } ]
+      },
+      { "id": "BPC1", "type": "computer", "label": "BPC1",
+        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
+        "ports": [ { "id": "p_bpc1_0", "ip": "", "cidr": "" } ]
+      },
+  
+      { "id": "FIREWALL", "type": "computer", "label": "FIREWALL",
+        "image": { "id": "img-fw", "name": "firewall-image" },
+        "flavor": { "vcpu": 2, "ram": 2048, "disk": 10 },
+        "ports": [
+          { "id": "p_fw_inside", "ip": "10.0.0.2", "cidr": "10.0.0.0/30" },
+          { "id": "p_fw_outside", "ip": "10.0.0.5", "cidr": "10.0.0.4/30" }
+        ]
+      },
+      { "id": "INTERNET", "type": "computer", "label": "INTERNET",
+        "image": { "id": "img-inet", "name": "internet-node" },
+        "flavor": { "vcpu": 1, "ram": 512, "disk": 5 },
+        "ports": [
+          { "id": "p_inet0", "ip": "10.0.0.6", "cidr": "10.0.0.4/30" }
+        ]
+      }
+    ],
+  
+    "links": [
+      { "id": "p_web0--p_sw_dmz_web", "from_port": "p_web0", "to_port": "p_sw_dmz_web", "from_node": null, "to_node": null },
+      { "id": "p_sw_dmz_core--p_rcore_dmz", "from_port": "p_sw_dmz_core", "to_port": "p_rcore_dmz", "from_node": null, "to_node": null },
+  
+      { "id": "p_pc1_0--p_sw_office_pc1", "from_port": "p_pc1_0", "to_port": "p_sw_office_pc1", "from_node": null, "to_node": null },
+      { "id": "p_pc2_0--p_sw_office_pc2", "from_port": "p_pc2_0", "to_port": "p_sw_office_pc2", "from_node": null, "to_node": null },
+      { "id": "p_sw_office_core--p_rcore_office", "from_port": "p_sw_office_core", "to_port": "p_rcore_office", "from_node": null, "to_node": null },
+  
+      { "id": "p_plc1_0--p_sw_ot_plc1", "from_port": "p_plc1_0", "to_port": "p_sw_ot_plc1", "from_node": null, "to_node": null },
+      { "id": "p_sw_ot_core--p_rcore_ot", "from_port": "p_sw_ot_core", "to_port": "p_rcore_ot", "from_node": null, "to_node": null },
+  
+      { "id": "p_admin0--p_sw_mgmt_admin", "from_port": "p_admin0", "to_port": "p_sw_mgmt_admin", "from_node": null, "to_node": null },
+      { "id": "p_sw_mgmt_core--p_rcore_mgmt", "from_port": "p_sw_mgmt_core", "to_port": "p_rcore_mgmt", "from_node": null, "to_node": null },
+  
+      { "id": "p_rcore_corefw--p_sw_corefw_core", "from_port": "p_rcore_corefw", "to_port": "p_sw_corefw_core", "from_node": null, "to_node": null },
+      { "id": "p_sw_corefw_fw--p_fw_inside", "from_port": "p_sw_corefw_fw", "to_port": "p_fw_inside", "from_node": null, "to_node": null },
+  
+      { "id": "p_fw_outside--p_sw_fwinet_fw", "from_port": "p_fw_outside", "to_port": "p_sw_fwinet_fw", "from_node": null, "to_node": null },
+      { "id": "p_sw_fwinet_inet--p_inet0", "from_port": "p_sw_fwinet_inet", "to_port": "p_inet0", "from_node": null, "to_node": null },
+  
+      { "id": "p_rcore_corebranch--p_sw_corebr_core", "from_port": "p_rcore_corebranch", "to_port": "p_sw_corebr_core", "from_node": null, "to_node": null },
+      { "id": "p_sw_corebr_branch--p_rbranch_core", "from_port": "p_sw_corebr_branch", "to_port": "p_rbranch_core", "from_node": null, "to_node": null },
+  
+      { "id": "p_rbranch_branchlan--p_sw_branch_rbranch", "from_port": "p_rbranch_branchlan", "to_port": "p_sw_branch_rbranch", "from_node": null, "to_node": null },
+      { "id": "p_sw_branch_bpc1--p_bpc1_0", "from_port": "p_sw_branch_bpc1", "to_port": "p_bpc1_0", "from_node": null, "to_node": null }
+    ]
+  }
+  
