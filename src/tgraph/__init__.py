@@ -8,6 +8,7 @@ from tgraph.core import (
     TGraph,
     TGraphError,
     ensure_stage,
+    normalize_graph,
 )
 
 __all__ = [
@@ -20,5 +21,5 @@ __all__ = [
     "TGraph",
     "TGraphError",
     "ensure_stage",
+    "normalize_graph",
 ]
-
