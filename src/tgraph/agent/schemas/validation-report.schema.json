@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["ok", "issues"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message", "severity"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "severity": { "enum": ["error", "warning"] },
+          "location": { "type": ["string", "null"] },
+          "details": { "type": "object" }
+        }
+      }
+    }
+  }
+}
+

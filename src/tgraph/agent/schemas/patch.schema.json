@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graph_patch"],
+  "properties": {
+    "graph_patch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["op"],
+        "properties": {
+          "op": {
+            "enum": ["ensure_node", "ensure_port", "ensure_link", "remove_node", "remove_port", "remove_link", "set_stage"]
+          }
+        }
+      }
+    }
+  }
+}
+
