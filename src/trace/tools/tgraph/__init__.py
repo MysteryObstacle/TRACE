@@ -10,7 +10,9 @@ from trace.tools.tgraph.model import (
     TAAL_DEFAULT_V1,
     TGraphJSON,
     ensure_tgraph_json,
+    from_standalone_graph,
     normalize_tgraph_json,
+    to_standalone_graph,
 )
 from trace.tools.tgraph.protocol import BoundTGraphTools
 from trace.tools.tgraph.runtime import TGraphRuntime
@@ -34,5 +36,7 @@ __all__ = [
     "infer_artifact_stage",
     "export_artifact",
     "ensure_tgraph_json",
+    "from_standalone_graph",
     "normalize_tgraph_json",
+    "to_standalone_graph",
 ]

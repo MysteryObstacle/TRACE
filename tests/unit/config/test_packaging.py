@@ -16,3 +16,10 @@ def test_pyproject_routes_trace_console_script_through_non_conflicting_wrapper()
     content = pyproject.read_text(encoding="utf-8")
 
     assert 'trace = "trace_cli:app"' in content
+
+
+def test_pyproject_exposes_standalone_tgraph_console_script():
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    content = pyproject.read_text(encoding="utf-8")
+
+    assert 'tgraph = "tgraph.cli.main:app"' in content

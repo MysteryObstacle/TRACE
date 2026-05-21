@@ -4,6 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tgraph import TGraph as StandaloneTGraph
+from tgraph import GraphStage
+
 
 LOGICAL_V1 = "logical.v1"
 TAAL_DEFAULT_V1 = "taal.default.v1"
@@ -71,3 +74,33 @@ def normalize_tgraph_json(graph: TGraphJSON | dict[str, Any]) -> TGraphJSON:
     from trace.tools.tgraph.runtime import TGraphRuntime
 
     return TGraphJSON.model_validate(TGraphRuntime.from_json(graph).to_json())
+
+
+def to_standalone_graph(
+    graph: TGraphJSON | dict[str, Any],
+    *,
+    stage: GraphStage = "logical",
+) -> StandaloneTGraph:
+    """Convert a TRACE compatibility graph into the standalone TGraph IR."""
+    trace_graph = ensure_tgraph_json(graph)
+    data = trace_graph.model_dump(mode="json")
+    data.pop("profile", None)
+    data["stage"] = stage
+    return StandaloneTGraph.model_validate(data)
+
+
+def from_standalone_graph(
+    graph: StandaloneTGraph | dict[str, Any],
+    *,
+    profile: str = TAAL_DEFAULT_V1,
+) -> TGraphJSON:
+    """Convert a standalone TGraph IR document into TRACE's legacy envelope."""
+    standalone = (
+        graph
+        if isinstance(graph, StandaloneTGraph)
+        else StandaloneTGraph.model_validate(graph)
+    )
+    data = standalone.model_dump(mode="json")
+    data.pop("stage", None)
+    data["profile"] = profile
+    return TGraphJSON.model_validate(data)
