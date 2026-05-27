@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from tgraph import TGraph, inspect_graph, validate_graph
 from tgraph.operations.mutate import execute_mutation_file
 from tgraph.operations.validate import ValidationContext
+from trace.stages.support_files import _FilterParams, filtered_view
 
 
 class MutationSummary(BaseModel):
@@ -72,7 +73,7 @@ class _InspectGraphToolInput(BaseModel):
     target: str | None = None
 
 
-class _ReadSupportFileInput(BaseModel):
+class _ReadSupportFileInput(_FilterParams):
     path: str
 
 
@@ -135,10 +136,15 @@ class StageRepairTools:
             return self.inspect_graph(view=view, **kwargs)
 
         @tool("read_support_file", args_schema=_ReadSupportFileInput)
-        def read_support_file_tool(path: str) -> dict[str, Any]:
-            """Read a generated constraint, checkpoint, or mutation support file."""
+        def read_support_file_tool(
+            path: str,
+            match: str | None = None,
+            keys: list[str] | None = None,
+            head_lines: int | None = None,
+        ) -> dict[str, Any]:
+            """Read a support file with optional substring match, JSON key filter, or head-lines window."""
 
-            return self.read_support_file(path)
+            return self.read_support_file(path, match=match, keys=keys, head_lines=head_lines)
 
         @tool("write_checkpoint_file", args_schema=_WriteSupportFileInput)
         def write_checkpoint_file_tool(path: str, content: str) -> dict[str, Any]:
@@ -178,11 +184,19 @@ class StageRepairTools:
     def inspect_graph(self, *, view: str = "summary", **kwargs: Any) -> dict[str, Any]:
         return inspect_graph(self._graph_model(), view=view, **kwargs)
 
-    def read_support_file(self, path: str) -> dict[str, Any]:
+    def read_support_file(
+        self,
+        path: str,
+        *,
+        match: str | None = None,
+        keys: list[str] | None = None,
+        head_lines: int | None = None,
+    ) -> dict[str, Any]:
         normalized = _safe_relative_path(path)
         if normalized not in self._support_files:
             return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
-        return {"ok": True, "path": normalized, "content": self._support_files[normalized]}
+        content = filtered_view(self._support_files[normalized], match=match, keys=keys, head_lines=head_lines)
+        return {"ok": True, "path": normalized, "content": content}
 
     def write_checkpoint_file(self, *, path: str, content: str) -> dict[str, Any]:
         normalized = _safe_relative_path(path)

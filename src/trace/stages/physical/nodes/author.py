@@ -11,7 +11,7 @@ from trace.stages.common import build_messages
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
-from trace.stages.support_files import write_support_file
+from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
 from trace.tools.images.catalog import image_catalog_prompt
 
 
@@ -64,6 +64,10 @@ class _RemoveCheckpointFileInput(BaseModel):
     path: str = DEFAULT_CHECKPOINT_PATH
 
 
+class _ReadPhysicalConstraintInput(_FilterParams):
+    path: str = DEFAULT_CONSTRAINT_PATH
+
+
 class PhysicalAuthorTools:
     def __init__(self, *, state: PhysicalState, physical_constraints: list[dict[str, Any]]) -> None:
         self._state = state
@@ -90,14 +94,23 @@ class PhysicalAuthorTools:
 
             return self.remove_checkpoint_file(path)
 
-        @tool("read_constraint_file")
-        def read_constraint_file_tool(path: str = DEFAULT_CONSTRAINT_PATH) -> dict[str, Any]:
-            """Read a generated constraint fact file from the current support files."""
+        @tool("read_constraint_file", args_schema=_ReadPhysicalConstraintInput)
+        def read_constraint_file_tool(
+            path: str = DEFAULT_CONSTRAINT_PATH,
+            match: str | None = None,
+            keys: list[str] | None = None,
+            head_lines: int | None = None,
+        ) -> dict[str, Any]:
+            """Read a physical constraint file with optional substring match, JSON key filter, or head-lines window."""
 
             content = (self._state.get("support_files") or {}).get(path)
             if content is None:
                 return {"ok": False, "error": {"message": f"support file not found: {path}"}}
-            return {"ok": True, "path": path, "content": content}
+            return {
+                "ok": True,
+                "path": path,
+                "content": filtered_view(content, match=match, keys=keys, head_lines=head_lines),
+            }
 
         @tool("validate_checkpoint_file")
         def validate_checkpoint_file_tool(path: str = DEFAULT_CHECKPOINT_PATH) -> dict[str, Any]:
