@@ -50,15 +50,6 @@ def _build_logical_graph(*, role_client, settings: TraceSettings):
     graph.add_edge("prepare", "author")
     graph.add_edge("author", "builder")
     graph.add_edge("builder", "validator")
-    graph.add_conditional_edges(
-        "validator",
-        lambda state: state["next_action"],
-        {
-            "finalize": "finalize",
-            "repair": "repair",
-            "failed": END,
-        },
-    )
     graph.add_edge("repair", "validator")
     graph.add_edge("finalize", END)
     return graph.compile()

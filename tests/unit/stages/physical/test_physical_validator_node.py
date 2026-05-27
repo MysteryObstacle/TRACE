@@ -23,8 +23,12 @@ def test_physical_validator_passes_logical_reference_graph_to_tgraph_validate() 
 
     result = validator_node(state)
 
-    assert result["evaluation_report"]["ok"] is False
-    assert any(issue["details"]["issue_kind"] == "missing_preserved_node" for issue in result["evaluation_report"]["issues"])
+    assert result.goto == "repair"
+    assert result.update["evaluation_report"]["ok"] is False
+    assert any(
+        issue["details"]["issue_kind"] == "missing_preserved_node"
+        for issue in result.update["evaluation_report"]["issues"]
+    )
 
 
 def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None:
@@ -71,5 +75,7 @@ def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None
 
     result = validator_node(state)
 
-    assert result["next_action"] == "repair"
-    assert {item["details"]["issue_kind"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint.execution.exception"}
+    assert result.goto == "repair"
+    assert {item["details"]["issue_kind"] for item in result.update["evaluation_report"]["issues"]} >= {
+        "checkpoint.execution.exception"
+    }

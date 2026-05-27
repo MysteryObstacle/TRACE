@@ -1,3 +1,5 @@
+from langgraph.graph import END
+
 from trace.stages.ground.nodes.evaluator import evaluator_node
 
 
@@ -31,9 +33,9 @@ def test_evaluator_node_merges_structural_and_semantic_issues():
 
     result = evaluator_node(state, client)
 
-    assert result["evaluation_report"]["passed"] is False
-    assert result["evaluation_report"]["issues"]
-    assert result["next_action"] == "author"
+    assert result.goto == "author"
+    assert result.update["evaluation_report"]["passed"] is False
+    assert result.update["evaluation_report"]["issues"]
 
 
 def test_evaluator_node_finalize_when_semantic_pass_and_structure_ok():
@@ -54,8 +56,8 @@ def test_evaluator_node_finalize_when_semantic_pass_and_structure_ok():
 
     result = evaluator_node(state, client)
 
-    assert result["evaluation_report"]["passed"] is True
-    assert result["next_action"] == "finalize"
+    assert result.goto == "finalize"
+    assert result.update["evaluation_report"]["passed"] is True
 
 
 def test_evaluator_node_records_notes_on_retry():
@@ -85,5 +87,5 @@ def test_evaluator_node_records_notes_on_retry():
 
     result = evaluator_node(state, client)
 
-    assert result["next_action"] == "author"
-    assert result["retry_history"][-1]["notes"] == ["add WEB"]
+    assert result.goto == "author"
+    assert result.update["retry_history"][-1]["notes"] == ["add WEB"]
