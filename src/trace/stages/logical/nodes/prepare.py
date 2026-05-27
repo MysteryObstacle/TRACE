@@ -12,10 +12,11 @@ def prepare_node(state: LogicalState) -> LogicalState:
     logical_path = ground_constraint_files.get("logical", LOGICAL_CONSTRAINTS_PATH)
     constraint_files = {"logical": logical_path}
 
-    state["draft_artifact"] = {
-        "graph": graph.model_dump(mode="json"),
-        "constraint_files": constraint_files,
-        "checkpoint_files": {},
+    return {
+        "draft_artifact": {
+            "graph": graph.model_dump(mode="json"),
+            "constraint_files": constraint_files,
+            "checkpoint_files": {},
+        },
+        "events": [{"type": "logical.prepare"}],
     }
-    state["events"] = [*state.get("events", []), {"type": "logical.prepare"}]
-    return state
