@@ -40,7 +40,7 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
     agent_result = role_client.invoke_agent(
         role_name="physical_builder",
         messages=messages,
-        tools=tools.as_agent_tools(include_checkpoint_tool=False),
+        tools=tools.as_agent_tools(include_checkpoint_tool=False, include_image_tools=True),
         max_tool_calls=MAX_TOOL_CALLS,
     )
     state["draft_artifact"] = tools.artifact_state()

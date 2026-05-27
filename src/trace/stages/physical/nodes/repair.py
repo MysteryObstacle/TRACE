@@ -39,7 +39,7 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
     agent_result = role_client.invoke_agent(
         role_name="physical_repair",
         messages=messages,
-        tools=repair_tools.as_agent_tools(),
+        tools=repair_tools.as_agent_tools(include_image_tools=True),
         max_tool_calls=MAX_TOOL_CALLS,
     )
 

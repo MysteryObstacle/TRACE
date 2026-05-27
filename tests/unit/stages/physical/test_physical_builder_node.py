@@ -81,14 +81,18 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
     human_content = "\n".join(item["content"] for item in messages if item["role"] == "human")
 
     assert client.calls[0]["role_name"] == "physical_builder"
-    assert client.calls[0]["tool_names"] == [
+    tool_names = set(client.calls[0]["tool_names"])
+    assert {
         "inspect_graph",
         "read_support_file",
         "write_mutation_file",
         "execute_mutation_file",
         "validate_graph",
-    ]
-    assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
+        "list_support_files",
+        "find_images",
+        "get_image",
+    }.issubset(tool_names)
+    assert "write_checkpoint_file" not in tool_names
     assert "[tgraph_contract]" in system_content
     assert "[image_catalog]" in system_content
     assert "img_pfsense" in system_content
