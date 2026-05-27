@@ -89,6 +89,7 @@ class _WriteMutationFileInput(BaseModel):
 class _ExecuteMutationFileInput(BaseModel):
     path: str
     run_validate: bool = Field(default=True, alias="validate")
+    include_graph: bool = False
 
 
 class StageRepairTools:
@@ -152,10 +153,10 @@ class StageRepairTools:
             return self.write_mutation_file(content=content, path=path)
 
         @tool("execute_mutation_file", args_schema=_ExecuteMutationFileInput)
-        def execute_mutation_file_tool(path: str, run_validate: bool = True) -> dict[str, Any]:
-            """Execute a mutation file transactionally against the current graph."""
+        def execute_mutation_file_tool(path: str, run_validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
+            """Execute a mutation file transactionally. Returns ok + operations + summary; pass include_graph=true to also receive the full graph."""
 
-            return self.execute_mutation_file(path=path, validate=run_validate)
+            return self.execute_mutation_file(path=path, validate=run_validate, include_graph=include_graph)
 
         @tool("validate_graph")
         def validate_graph_tool() -> dict[str, Any]:
@@ -198,7 +199,7 @@ class StageRepairTools:
         self._write_support_file(normalized, content)
         return {"ok": True, "path": normalized}
 
-    def execute_mutation_file(self, *, path: str, validate: bool = True) -> dict[str, Any]:
+    def execute_mutation_file(self, *, path: str, validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
         normalized = _safe_relative_path(path)
         if normalized not in self._support_files:
             return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
@@ -209,9 +210,25 @@ class StageRepairTools:
             validate=validate,
             validation_context=self._validation_context(),
         )
-        payload = result.model_dump(mode="json", exclude_none=True)
+        operations = list(result.operations or [])
         if result.ok and result.graph is not None:
             self._artifact["graph"] = result.graph.model_dump(mode="json")
+        graph_model = self._graph_model()
+        summary = MutationSummary.from_operations(
+            stage=graph_model.stage,
+            node_count=len(graph_model.nodes),
+            link_count=len(graph_model.links),
+            operations=operations,
+        )
+        payload: dict[str, Any] = {
+            "ok": result.ok,
+            "operations": [dict(op) for op in operations],
+            "summary": summary.model_dump(mode="json"),
+        }
+        if not result.ok:
+            payload["issues"] = [issue.model_dump(mode="json") for issue in result.issues]
+        if include_graph and result.graph is not None:
+            payload["graph"] = result.graph.model_dump(mode="json")
         return payload
 
     def validate_graph(self) -> dict[str, Any]:
