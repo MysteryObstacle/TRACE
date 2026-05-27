@@ -44,13 +44,13 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
         def __init__(self) -> None:
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append(
                 {
                     "role_name": role_name,
                     "messages": messages,
                     "tool_names": [_tool_name(tool) for tool in tools],
-                    "max_tool_calls": max_tool_calls,
+                    "max_react_steps": max_react_steps,
                 }
             )
             bound = {_tool_name(tool): tool for tool in tools}
@@ -65,7 +65,7 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
             return {"messages": [{"role": "assistant", "content": "logical build complete"}]}
 
     client = FakeRoleClient()
-    result = builder_node(state, client)
+    result = _merge_logical_partial(state, builder_node(state, client))
     graph = result["draft_artifact"]["graph"]
     messages = client.calls[0]["messages"]
     human_content = "\n".join(item["content"] for item in messages if item["role"] == "human")
@@ -113,10 +113,10 @@ def test_logical_builder_keeps_seed_graph_when_agent_does_not_execute_mutation(t
     }
 
     class FakeRoleClient:
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             return {"messages": [{"role": "assistant", "content": "no mutation needed"}]}
 
-    result = builder_node(state, FakeRoleClient())
+    result = _merge_logical_partial(state, builder_node(state, FakeRoleClient()))
 
     assert result["draft_artifact"]["graph"]["links"] == []
     assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
@@ -137,3 +137,12 @@ def _call_tool(tool, payload=None):
     if payload is None:
         return tool()
     return tool(**payload)
+
+
+def _merge_logical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged

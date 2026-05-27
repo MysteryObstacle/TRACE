@@ -23,7 +23,7 @@ def test_logical_prepare_seeds_graph_and_references_ground_constraint_files() ->
         "events": [],
     }
 
-    result = prepare_node(state)
+    result = _merge_logical_partial(state, prepare_node(state))
 
     graph = result["draft_artifact"]["graph"]
     assert graph["stage"] == "logical"
@@ -45,7 +45,7 @@ def test_logical_prepare_does_not_carry_physical_constraint_files() -> None:
         "events": [],
     }
 
-    result = prepare_node(state)
+    result = _merge_logical_partial(state, prepare_node(state))
 
     assert result["draft_artifact"]["constraint_files"] == {"logical": LOGICAL_CONSTRAINTS_PATH}
 
@@ -56,6 +56,16 @@ def test_logical_prepare_expands_node_groups_with_existing_behavior() -> None:
         "constraint_files": {"logical": LOGICAL_CONSTRAINTS_PATH},
     }
 
-    result = prepare_node({"ground_artifact": grounded, "events": [], "support_files": {}})
+    base_state = {"ground_artifact": grounded, "events": [], "support_files": {}}
+    result = _merge_logical_partial(base_state, prepare_node(base_state))
 
     assert [node["id"] for node in result["draft_artifact"]["graph"]["nodes"]] == ["PLC1", "PLC2"]
+
+
+def _merge_logical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged
