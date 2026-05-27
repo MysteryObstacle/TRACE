@@ -10,7 +10,7 @@ from typing import Any
 from langchain.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
-from tgraph import TGraph, inspect_graph, validate_graph
+from tgraph import TGraph, inspect_graph as _inspect_graph_view, validate_graph
 from tgraph.operations.mutate import execute_mutation_file
 from tgraph.operations.validate import ValidationContext
 from trace.stages.support_files import _FilterParams, filtered_view
@@ -71,12 +71,96 @@ def _derive_op_counts(operations: list[dict[str, Any]]) -> dict[str, int]:
     return dict(Counter(op.get("op", "") for op in operations if op.get("op")))
 
 
+_CHECK_FN_PATTERN = re.compile(r"^\s*def\s+(check_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
+
+
+def _derive_produced_files(attempted_actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest_exec_by_path: dict[str, dict[str, Any]] = {}
+    for action in attempted_actions:
+        if action.get("tool") != "execute_mutation_file":
+            continue
+        path = (action.get("args") or {}).get("path")
+        if not isinstance(path, str):
+            continue
+        if action.get("ok") is True:
+            latest_exec_by_path[path] = action
+
+    produced: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for action in attempted_actions:
+        tool_name = action.get("tool")
+        args = action.get("args") or {}
+
+        if tool_name == "write_mutation_file":
+            path = args.get("path")
+            if not isinstance(path, str) or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            paired_execute = latest_exec_by_path.get(path)
+            summary_dict = ((paired_execute or {}).get("result") or {}).get("summary") or {}
+            op_counts = summary_dict.get("op_counts") or {}
+            node_targets = list(summary_dict.get("affected_node_ids") or [])
+            snapshot_path = summary_dict.get("snapshot_path")
+            produced.append(
+                {
+                    "path": path,
+                    "file_kind": "mutation",
+                    "node_targets": node_targets,
+                    "op_counts": op_counts,
+                    "summary_one_line": _summary_one_line_for_mutation(op_counts, node_targets),
+                    "snapshot_path": snapshot_path,
+                }
+            )
+
+        elif tool_name == "write_checkpoint_file":
+            path = args.get("path")
+            if not isinstance(path, str) or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            content = args.get("content") or ""
+            fn_names = _CHECK_FN_PATTERN.findall(content)
+            produced.append(
+                {
+                    "path": path,
+                    "file_kind": "checkpoint",
+                    "node_targets": [],
+                    "op_counts": {},
+                    "summary_one_line": _summary_one_line_for_checkpoint(fn_names),
+                    "snapshot_path": None,
+                }
+            )
+
+    return produced
+
+
+def _summary_one_line_for_mutation(op_counts: dict[str, int], node_targets: list[str]) -> str:
+    if not op_counts:
+        return "mutation written; not yet executed"
+    op_part = ", ".join(f"{op} x{count}" for op, count in sorted(op_counts.items()))
+    if not node_targets:
+        return op_part
+    display = node_targets[:5]
+    tail = f", ... +{len(node_targets) - 5} more" if len(node_targets) > 5 else ""
+    return f"{op_part} on [{', '.join(display)}{tail}]"
+
+
+def _summary_one_line_for_checkpoint(fn_names: list[str]) -> str:
+    if not fn_names:
+        return "checkpoint defines: <unknown>"
+    display = fn_names[:5]
+    tail = f", ... +{len(fn_names) - 5} more" if len(fn_names) > 5 else ""
+    return f"checkpoint defines: {', '.join(display)}{tail}"
+
+
 class _InspectGraphToolInput(BaseModel):
     view: str = "summary"
     node_id: str | None = None
     port_id: str | None = None
     source: str | None = None
     target: str | None = None
+    against: str | None = None
+    baseline_attempt_id: int | None = None
 
 
 class _ReadSupportFileInput(_FilterParams):
@@ -146,12 +230,19 @@ class StageRepairTools:
             port_id: str | None = None,
             source: str | None = None,
             target: str | None = None,
+            against: str | None = None,
+            baseline_attempt_id: int | None = None,
         ) -> dict[str, Any]:
-            """Inspect the current graph with summary, node, links, path, or cidrs views."""
+            """Inspect the current graph. Views: summary, node, links, path, cidrs, diff. For view='diff' pass against='previous_attempt' or 'logical_reference' (and optionally baseline_attempt_id for previous_attempt)."""
 
             kwargs = {"node_id": node_id, "port_id": port_id, "source": source, "target": target}
             kwargs = {key: value for key, value in kwargs.items() if value is not None}
-            return self.inspect_graph(view=view, **kwargs)
+            return self.inspect_graph(
+                view=view,
+                against=against,
+                baseline_attempt_id=baseline_attempt_id,
+                **kwargs,
+            )
 
         @tool("read_support_file", args_schema=_ReadSupportFileInput)
         def read_support_file_tool(
@@ -228,8 +319,20 @@ class StageRepairTools:
             tools.extend([find_images_tool, get_image_tool])
         return tools
 
-    def inspect_graph(self, *, view: str = "summary", **kwargs: Any) -> dict[str, Any]:
-        return inspect_graph(self._graph_model(), view=view, **kwargs)
+    def inspect_graph(
+        self,
+        *,
+        view: str = "summary",
+        against: str | None = None,
+        baseline_attempt_id: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if view == "diff":
+            baseline_graph = self._resolve_diff_baseline(against=against, baseline_attempt_id=baseline_attempt_id)
+            if isinstance(baseline_graph, dict) and baseline_graph.get("ok") is False:
+                return baseline_graph
+            return _inspect_graph_view(self._graph_model(), view="diff", baseline=baseline_graph)
+        return _inspect_graph_view(self._graph_model(), view=view, **kwargs)
 
     def read_support_file(
         self,
@@ -372,6 +475,33 @@ class StageRepairTools:
         if not match:
             return None
         return int(match.group(1))
+
+    def _resolve_diff_baseline(
+        self,
+        *,
+        against: str | None,
+        baseline_attempt_id: int | None,
+    ) -> Any:
+        if against == "logical_reference":
+            if self._logical_reference_graph is None:
+                return {"ok": False, "error": {"message": "logical_reference graph not provided"}}
+            return self._logical_reference_graph
+        if against in ("previous_attempt", None):
+            stage = self._graph_model().stage
+            snapshot_prefix = f"{stage}/mutations/snapshots/attempt_"
+            if baseline_attempt_id is not None:
+                path = f"{snapshot_prefix}{baseline_attempt_id}.json"
+                if path not in self._support_files:
+                    return {"ok": False, "error": {"message": f"snapshot not found: {path}"}}
+                return TGraph.model_validate(json.loads(self._support_files[path]))
+            candidates = sorted(
+                (key for key in self._support_files if key.startswith(snapshot_prefix) and key.endswith(".json")),
+                key=lambda key: int(key.rsplit("_", 1)[-1].split(".")[0]),
+            )
+            if not candidates:
+                return {"ok": False, "error": {"message": "no previous attempt snapshot available"}}
+            return TGraph.model_validate(json.loads(self._support_files[candidates[-1]]))
+        return {"ok": False, "error": {"message": f"unknown against: {against!r}"}}
 
 
 def _safe_relative_path(relative_path: str) -> str:
