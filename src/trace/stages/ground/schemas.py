@@ -61,6 +61,8 @@ class GroundDraftArtifact(_GroundBaseModel):
         default_factory=list,
         description="Physical deployment constraints. Leave empty when there is no explicit physical intent.",
     )
+    unsolvable: bool = False
+    unsolvable_reason: str | None = None
 
 
 class GroundArtifact(_GroundBaseModel):
