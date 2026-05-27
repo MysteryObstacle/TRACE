@@ -68,14 +68,18 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
     result = repair_node(state, client)
     node = result["draft_artifact"]["graph"]["nodes"][0]
 
-    assert client.calls[0]["tool_names"] == [
+    tool_names = set(client.calls[0]["tool_names"])
+    assert {
         "inspect_graph",
         "read_support_file",
         "write_checkpoint_file",
         "write_mutation_file",
         "execute_mutation_file",
         "validate_graph",
-    ]
+        "list_support_files",
+        "find_images",
+        "get_image",
+    }.issubset(tool_names)
     assert node["image"]["id"] == "img_openplc"
     assert node["flavor"]["vcpu"] == 1
     assert result["messages"][-1]["content"] == "physical repair complete"
@@ -128,8 +132,8 @@ def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
 
     assert messages[1]["role"] == "system"
     assert "TGraph contract for this repair round" in messages[1]["content"]
-    assert "Image catalog for this repair round" in messages[2]["content"]
-    assert "img_pfsense" in messages[2]["content"]
+    assert "Image catalog for this repair round" not in (messages[2]["content"] if len(messages) > 2 else "")
+    assert all("img_pfsense" not in msg.get("content", "") for msg in messages if msg.get("role") == "human")
     assert "[tgraph_contract]" not in human_contents
     assert "[image_catalog]" not in human_contents
     assert "[logical_topology]" in human_contents

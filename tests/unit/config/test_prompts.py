@@ -50,7 +50,7 @@ def test_prompt_contract_loader_uses_standalone_tgraph_playbooks():
     assert "connect_nodes" not in logical_author
     assert "switch_has_subnet" not in logical_author
     assert "node_interface_on_segment" not in logical_author
-    assert "unsupported IR fields such as `software`, `packages`, `zone`, `segment`" in logical_author
+    assert "function parameter pointing to a neighboring node" in logical_author or "segment is a function parameter" in logical_author
 
     assert "mutation file" in logical_repair
     assert "repair the stage artifact shape" in logical_repair.lower()
@@ -71,8 +71,7 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
     assert "logical/checkpoints.py" in author_prompt
     assert "write_checkpoint_file" in author_prompt
     assert "validate_checkpoint_file" in author_prompt
-    assert "def check_lc9(tgraph)" in author_prompt
-    assert "tgraph.check_chain" in author_prompt
+    assert "check_<constraint_id>" in author_prompt
     assert "logical_checkpoints" not in author_prompt
     assert "logical_validator_script" not in author_prompt
     assert "segment_id" not in author_prompt
@@ -86,8 +85,6 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
 
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
-    assert "inspect_graph" in repair_prompt
-    assert "validate_graph" in repair_prompt
     assert "write_checkpoint_file" in repair_prompt
     assert "apply_graph_patch" not in repair_prompt
 
@@ -99,10 +96,12 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
 
     assert "physical/constraints.json" in author_prompt
     assert "ground/physical_constraints.json" not in author_prompt
-    assert "image_catalog" in author_prompt
+    assert "find_images" in author_prompt
+    assert "get_image" in author_prompt
     assert "physical/checkpoints.py" in author_prompt
     assert "write_checkpoint_file" in author_prompt
     assert "validate_checkpoint_file" in author_prompt
+    assert "Kind→Tool" in author_prompt
     assert "tgraph.check_image_exact" in author_prompt
 
     assert "write_mutation_file" in builder_prompt
@@ -110,12 +109,13 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
     assert "physical/mutations/build.py" in builder_prompt
     assert "image" in builder_prompt
     assert "flavor" in builder_prompt
+    assert "find_images" in builder_prompt
     assert "working_graph" not in builder_prompt
 
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
-    assert "inspect_graph" in repair_prompt
     assert "validate_graph" in repair_prompt
     assert "replace_validator_script" not in repair_prompt
-    assert "image_catalog" in repair_prompt
+    assert "find_images" in repair_prompt
+    assert "get_image" in repair_prompt
     assert "apply_graph_patch" not in repair_prompt

@@ -11,8 +11,9 @@ from trace.stages.common import build_messages
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
-from trace.stages.support_files import write_support_file
-from trace.tools.images.catalog import image_catalog_prompt
+from trace.stages.repair_tools import _FindImagesInput, _GetImageInput
+from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
+from trace.tools.images.catalog import find_images, get_image
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "author.md"
@@ -31,14 +32,10 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
         task="Author physical-stage checkpoint functions for the current logical graph.",
         context_sections={
-            "graph_summary": _graph_summary(state["logical_artifact"]["graph"]),
             "constraint_files": state.get("draft_artifact", {}).get("constraint_files", {})
             or ground_artifact.get("constraint_files", {"physical": DEFAULT_CONSTRAINT_PATH}),
         },
-        system_context_sections={
-            "tgraph_contract": load_tgraph_contract_for("physical_author"),
-            "image_catalog": image_catalog_prompt(),
-        },
+        system_context_sections={"tgraph_contract": load_tgraph_contract_for("physical_author")},
     )
     agent_result = role_client.invoke_agent(
         role_name="physical_author",
@@ -63,6 +60,10 @@ class _WriteCheckpointFileInput(BaseModel):
 
 class _RemoveCheckpointFileInput(BaseModel):
     path: str = DEFAULT_CHECKPOINT_PATH
+
+
+class _ReadPhysicalConstraintInput(_FilterParams):
+    path: str = DEFAULT_CONSTRAINT_PATH
 
 
 class PhysicalAuthorTools:
@@ -91,14 +92,23 @@ class PhysicalAuthorTools:
 
             return self.remove_checkpoint_file(path)
 
-        @tool("read_constraint_file")
-        def read_constraint_file_tool(path: str = DEFAULT_CONSTRAINT_PATH) -> dict[str, Any]:
-            """Read a generated constraint fact file from the current support files."""
+        @tool("read_constraint_file", args_schema=_ReadPhysicalConstraintInput)
+        def read_constraint_file_tool(
+            path: str = DEFAULT_CONSTRAINT_PATH,
+            match: str | None = None,
+            keys: list[str] | None = None,
+            head_lines: int | None = None,
+        ) -> dict[str, Any]:
+            """Read a physical constraint file with optional substring match, JSON key filter, or head-lines window."""
 
             content = (self._state.get("support_files") or {}).get(path)
             if content is None:
                 return {"ok": False, "error": {"message": f"support file not found: {path}"}}
-            return {"ok": True, "path": path, "content": content}
+            return {
+                "ok": True,
+                "path": path,
+                "content": filtered_view(content, match=match, keys=keys, head_lines=head_lines),
+            }
 
         @tool("validate_checkpoint_file")
         def validate_checkpoint_file_tool(path: str = DEFAULT_CHECKPOINT_PATH) -> dict[str, Any]:
@@ -106,11 +116,33 @@ class PhysicalAuthorTools:
 
             return self.validate_checkpoint_file(path)
 
+        @tool("find_images", args_schema=_FindImagesInput)
+        def find_images_tool(
+            query: str | None = None,
+            roles: list[str] | None = None,
+            node_type: str | None = None,
+            limit: int = 10,
+        ) -> dict[str, Any]:
+            """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
+
+            return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
+
+        @tool("get_image", args_schema=_GetImageInput)
+        def get_image_tool(image_id: str) -> dict[str, Any]:
+            """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
+
+            try:
+                return get_image(image_id)
+            except KeyError as exc:
+                return {"ok": False, "error": {"message": str(exc)}}
+
         return [
             write_checkpoint_file_tool,
             remove_checkpoint_file_tool,
             read_constraint_file_tool,
             validate_checkpoint_file_tool,
+            find_images_tool,
+            get_image_tool,
         ]
 
     def write_checkpoint_file(self, *, content: str, path: str = DEFAULT_CHECKPOINT_PATH) -> dict[str, Any]:
@@ -227,16 +259,6 @@ def _checkpoint_file_static_issues(
             }
         )
     return issues
-
-
-def _graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
-    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-    links = graph.get("links", []) if isinstance(graph, dict) else []
-    return {
-        "stage": graph.get("stage") if isinstance(graph, dict) else None,
-        "nodes": [{"id": node.get("id"), "type": node.get("type")} for node in nodes if isinstance(node, dict)],
-        "link_count": len(links),
-    }
 
 
 def _normalize_checkpoint_path(path: str) -> str:

@@ -2,6 +2,16 @@ from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
 from trace.stages.physical.nodes.author import author_node
 
 
+def test_physical_author_tool_names_include_image_tools() -> None:
+    from trace.stages.physical.nodes.author import PhysicalAuthorTools
+
+    state = {"support_files": {"ground/physical_constraints.json": "{}"}}
+    tools = PhysicalAuthorTools(state=state, physical_constraints=[]).as_agent_tools()
+    names = {tool.name for tool in tools}
+    assert "find_images" in names
+    assert "get_image" in names
+
+
 def test_physical_author_node_injects_tgraph_contract() -> None:
     state = {
         "logical_artifact": {"graph": {"stage": "logical", "nodes": [], "links": []}, "checkpoint_files": {}},
@@ -39,8 +49,8 @@ def test_physical_author_node_injects_tgraph_contract() -> None:
 
     assert messages[1]["role"] == "system"
     assert "[tgraph_contract]" in system_content
-    assert "[image_catalog]" in system_content
-    assert "img_pfsense" in system_content
+    assert "[image_catalog]" not in system_content
+    assert "img_pfsense" not in system_content
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
     assert "ground/physical_constraints.json" in human_content

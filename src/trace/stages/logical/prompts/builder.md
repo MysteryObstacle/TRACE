@@ -16,18 +16,11 @@ def mutate(tgraph):
     ...
 ```
 
-Use TGraph mutation APIs:
-- `tgraph.ensure_direct_link(node_a, node_b, link_key=None)`
-- `tgraph.ensure_chain([node_a, node_b, ...], link_keys=None)`
-- `tgraph.ensure_ring([node_a, node_b, ...], link_keys=None)`
-- `tgraph.ensure_star(center=..., leaves=[...], link_keys=None)`
-- `tgraph.ensure_mesh([...])`
-- `tgraph.ensure_subnet(switch, cidr=...)`
-- `tgraph.ensure_interface(node, segment=..., cidr=..., ip=None, link_key=None)`
-
 ## Rules
 - Build from the current seed skeleton; do not recreate node inventory from scratch.
 - Do not write checkpoint files.
 - Do not use patch tools or legacy inline checkpoint fields.
-- Do not invent unsupported IR fields such as `segment`, `zone`, `firewall_rules`, `software`, or `packages`.
+- Do not invent unsupported IR fields such as `zone`, `firewall_rules`, `software`, or `packages`. `segment` is a parameter of `ensure_interface` pointing to a neighboring switch node id — pass an existing node id.
 - Use stage-local files only: `logical/constraints.json`, `logical/checkpoints.py`, and `logical/mutations/build.py`.
+
+Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.

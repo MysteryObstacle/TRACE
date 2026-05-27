@@ -77,6 +77,7 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
         "write_mutation_file",
         "execute_mutation_file",
         "validate_graph",
+        "list_support_files",
     ]
     assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
     assert graph["links"][0]["id"] == "PLC1-SW1-1"
@@ -85,7 +86,7 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
     assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
     assert "working_graph" not in result
     assert "[working_graph]" not in human_content
-    assert "[graph_summary]" in human_content
+    assert "[graph_summary]" not in human_content
     assert result["events"][-1] == {"type": "logical.builder.completed", "attempt": 1}
 
 

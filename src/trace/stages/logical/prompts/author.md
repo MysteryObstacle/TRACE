@@ -12,16 +12,7 @@ Your task is to write `logical/checkpoints.py` for logical constraints. You are 
 - Each function checks only the matching constraint id.
 - Return `[]` or `None` when the check passes.
 - Return a repair-friendly issue dict or list of issue dicts when it fails.
-- Prefer one-line TGraph checks such as `return tgraph.check_chain([...])`.
-
-## TGraph Check API
-- `tgraph.check_subnet(switch, cidr)`
-- `tgraph.check_interface(node, segment=..., cidr=..., ip=..., link_key=None)`
-- `tgraph.check_direct_link(node_a, node_b, link_key=None)`
-- `tgraph.check_chain([node_a, node_b, ...], link_keys=None)`
-- `tgraph.check_ring([node_a, node_b, ...], link_keys=None)`
-- `tgraph.check_star(center=..., leaves=[...], link_keys=None)`
-- `tgraph.check_mesh([...])`
+- Prefer one-line built-in TGraph checks where the contract documents a matching `check_*` API.
 
 ## Custom Issue Guidance
 When built-in checks are not enough, return issues with useful repair details:
@@ -44,11 +35,6 @@ def check_lc_custom(tgraph):
     return []
 ```
 
-## Example
-For constraint id `lc9`:
-```python
-def check_lc9(tgraph):
-    return tgraph.check_chain(["WEB", "SW_DMZ", "R_CORE"])
-```
-
 Only use tools to write and validate the file. Do not print the artifact in your final message.
+
+Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.

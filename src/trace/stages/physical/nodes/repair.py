@@ -7,7 +7,6 @@ from typing import Any
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.repair_tools import StageRepairTools
-from trace.tools.images.catalog import image_catalog_prompt
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
@@ -26,7 +25,6 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
     messages = _build_repair_messages(
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
         tgraph_contract=load_tgraph_contract_for("physical_repair"),
-        image_catalog=image_catalog_prompt(),
         evaluation_report=state["evaluation_report"],
         current_topology=repair_tools.inspect_graph(view="summary"),
         logical_topology=state["logical_artifact"]["graph"],
@@ -39,7 +37,7 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
     agent_result = role_client.invoke_agent(
         role_name="physical_repair",
         messages=messages,
-        tools=repair_tools.as_agent_tools(),
+        tools=repair_tools.as_agent_tools(include_image_tools=True),
         max_tool_calls=MAX_TOOL_CALLS,
     )
 
@@ -63,7 +61,6 @@ def _build_repair_messages(
     *,
     system_prompt: str,
     tgraph_contract: str,
-    image_catalog: str,
     evaluation_report: dict[str, Any],
     current_topology: dict[str, Any],
     logical_topology: dict[str, Any],
@@ -75,7 +72,6 @@ def _build_repair_messages(
     return [
         {"role": "system", "content": system_prompt},
         {"role": "system", "content": "TGraph contract for this repair round:\n\n" + tgraph_contract},
-        {"role": "system", "content": "Image catalog for this repair round:\n\n" + image_catalog},
         {"role": "human", "content": "Use file-backed TGraph tools to repair the physical artifact while preserving logical topology."},
         {"role": "human", "content": _format_section("evaluation_report", evaluation_report)},
         {"role": "human", "content": _format_section("evaluation_report_is_latest", True)},
