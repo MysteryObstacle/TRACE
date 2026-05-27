@@ -1,3 +1,5 @@
+from langgraph.graph import END
+
 from trace.stages.logical.nodes.validator import validator_node
 
 
@@ -26,8 +28,8 @@ def test_logical_validator_routes_f4_authored_check_failures_to_repair(tmp_path)
 
     result = validator_node(state)
 
-    assert result["evaluation_report"]["ok"] is False
-    assert result["next_action"] == "repair"
+    assert result.goto == "repair"
+    assert result.update["evaluation_report"]["ok"] is False
 
 
 def test_logical_validator_routes_checkpoint_execution_errors_to_repair(tmp_path) -> None:
@@ -52,6 +54,8 @@ def test_logical_validator_routes_checkpoint_execution_errors_to_repair(tmp_path
 
     result = validator_node(state)
 
-    assert result["evaluation_report"]["ok"] is False
-    assert {item["details"]["issue_kind"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint.execution.exception"}
-    assert result["next_action"] == "repair"
+    assert result.goto == "repair"
+    assert result.update["evaluation_report"]["ok"] is False
+    assert {item["details"]["issue_kind"] for item in result.update["evaluation_report"]["issues"]} >= {
+        "checkpoint.execution.exception"
+    }

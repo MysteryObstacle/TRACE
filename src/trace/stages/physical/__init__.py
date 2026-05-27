@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 
@@ -52,15 +53,6 @@ def _build_physical_graph(*, role_client, settings: TraceSettings):
     graph.add_edge("prepare", "author")
     graph.add_edge("author", "builder")
     graph.add_edge("builder", "validator")
-    graph.add_conditional_edges(
-        "validator",
-        lambda state: state["next_action"],
-        {
-            "finalize": "finalize",
-            "repair": "repair",
-            "failed": END,
-        },
-    )
     graph.add_edge("repair", "validator")
     graph.add_edge("finalize", END)
     return graph.compile()

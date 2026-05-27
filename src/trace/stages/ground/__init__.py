@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 
@@ -40,15 +41,6 @@ def _build_ground_graph(*, role_client, settings: TraceSettings):
     graph.set_entry_point("prepare")
     graph.add_edge("prepare", "author")
     graph.add_edge("author", "evaluator")
-    graph.add_conditional_edges(
-        "evaluator",
-        lambda state: state["next_action"],
-        {
-            "finalize": "finalize",
-            "author": "author",
-            "failed": END,
-        },
-    )
     graph.add_edge("finalize", END)
     return graph.compile()
 
