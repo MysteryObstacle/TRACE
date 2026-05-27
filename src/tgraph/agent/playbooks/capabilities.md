@@ -26,7 +26,7 @@ TGraph cannot directly:
 - run shell, cloud-init, or Ansible actions
 - look up provider catalogs or image catalogs
 - guarantee that an image or flavor exists in a real provider
-- represent unsupported IR fields such as `software`, `packages`, `zone`, `segment`, `firewall_rules`, or provider-specific deployment plans
+- represent unsupported IR fields such as `software`, `packages`, `zone`, `firewall_rules`, or provider-specific deployment plans (`segment` is a function parameter pointing to a neighboring node, not an IR field)
 
 If a request depends on knowledge, workflow, catalogs, or provider behavior, the caller must supply that outside TGraph.
 

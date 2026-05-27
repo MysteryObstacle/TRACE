@@ -13,3 +13,15 @@ Use checkpoint files for intent checks that do not belong in the graph shape its
 Network intent must stay CIDR-centered. Do not invent segment-style IR fields.
 
 Do not invent workflow, knowledge, catalog, image, flavor, or domain assumptions inside TGraph. Put caller-owned context in the outer application.
+
+## TGraph Check / Editor API (interface fact authoring)
+
+When the constraint is interface-shaped, use these APIs explicitly:
+
+- `tgraph.check_interface(node, segment=..., cidr=None, ip=None, link_key=None)`
+  - `segment` is **required**; it is the neighboring switch / segment-carrier node id (a function parameter that points to another node), not an IR field on nodes or ports.
+  - `cidr`, `ip`, and `link_key` are optional refinements.
+- `tgraph.ensure_interface(node, segment=..., cidr=..., ip=None, link_key=None)`
+  - Same `segment` semantics. The mutation creates or updates the interface port.
+
+`segment` always identifies an existing node id. It is never a top-level IR field.
