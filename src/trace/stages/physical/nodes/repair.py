@@ -10,7 +10,7 @@ from trace.stages.repair_tools import StageRepairTools, _derive_produced_files
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
-MAX_TOOL_CALLS = 12
+MAX_REACT_STEPS = 12
 LEDGER_WINDOW = 2
 
 
@@ -39,12 +39,9 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
         role_name="physical_repair",
         messages=messages,
         tools=repair_tools.as_agent_tools(include_image_tools=True),
-        max_tool_calls=MAX_TOOL_CALLS,
+        max_react_steps=MAX_REACT_STEPS,
     )
 
-    state["draft_artifact"] = repair_tools.artifact_state()
-    state["support_files"] = repair_tools.support_files()
-    state["messages"] = _extract_messages(agent_result)
     post_repair_report = repair_tools.validate_graph()
     ledger_entry = _build_repair_ledger_entry(
         round_index=len(prior_ledger) + 1,
@@ -52,10 +49,16 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
         issues_after=post_repair_report,
         attempted_actions=_extract_tool_attempts(agent_result),
     )
-    state["attempt"] += 1
-    state["repair_history"] = [*prior_ledger, ledger_entry]
-    state["events"] = [*state.get("events", []), {"type": "physical.repair.completed", "attempt": state["attempt"]}]
-    return state
+    next_attempt = state["attempt"] + 1
+
+    return {
+        "draft_artifact": repair_tools.artifact_state(),
+        "support_files": repair_tools.support_files(),
+        "messages": _extract_messages(agent_result),
+        "attempt": next_attempt,
+        "repair_history": [ledger_entry],
+        "events": [{"type": "physical.repair.completed", "attempt": next_attempt}],
+    }
 
 
 def _build_repair_messages(

@@ -27,17 +27,21 @@ def finalize_node(state: GroundState) -> GroundState:
         constraint_files=constraint_files,
     ).model_dump(mode="json")
 
-    state["status"] = "completed"
-    state["result"] = {
-        "stage_id": "ground",
-        "artifact": artifact,
-        "support_files": state.get("support_files", {}),
-        "memory_delta": {},
-        "attempts_used": state["attempt"],
-        "evaluation_summary": state.get("evaluation_report"),
-        "messages": state.get("messages", []),
-        "tool_journal": [],
-        "retry_history": state.get("retry_history", []),
-        "events": [*state.get("events", []), {"type": "ground.completed"}],
+    prior_events = list(state.get("events", []))
+    completion_event = {"type": "ground.completed"}
+    return {
+        "status": "completed",
+        "events": [completion_event],
+        "result": {
+            "stage_id": "ground",
+            "artifact": artifact,
+            "support_files": state.get("support_files", {}),
+            "memory_delta": {},
+            "attempts_used": state["attempt"],
+            "evaluation_summary": state.get("evaluation_report"),
+            "messages": state.get("messages", []),
+            "tool_journal": [],
+            "retry_history": list(state.get("retry_history", [])),
+            "events": [*prior_events, completion_event],
+        },
     }
-    return state

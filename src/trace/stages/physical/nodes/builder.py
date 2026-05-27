@@ -10,7 +10,7 @@ from trace.stages.repair_tools import StageRepairTools
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "builder.md"
-MAX_TOOL_CALLS = 24
+MAX_REACT_STEPS = 24
 
 
 def builder_node(state: PhysicalState, role_client) -> PhysicalState:
@@ -38,13 +38,19 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
         role_name="physical_builder",
         messages=messages,
         tools=tools.as_agent_tools(include_checkpoint_tool=False, include_image_tools=True),
-        max_tool_calls=MAX_TOOL_CALLS,
+        max_react_steps=MAX_REACT_STEPS,
     )
-    state["draft_artifact"] = tools.artifact_state()
-    state["support_files"] = tools.support_files()
-    state["messages"] = _extract_messages(agent_result) or messages
-    state["events"] = [*state.get("events", []), {"type": "physical.builder.completed", "attempt": state["attempt"]}]
-    return state
+    return {
+        "draft_artifact": tools.artifact_state(),
+        "support_files": tools.support_files(),
+        "messages": _extract_messages(agent_result) or messages,
+        "events": [
+            {
+                "type": "physical.builder.completed",
+                "attempt": state["attempt"],
+            }
+        ],
+    }
 
 
 def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:

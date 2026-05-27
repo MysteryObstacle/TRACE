@@ -20,13 +20,14 @@ def prepare_node(state: PhysicalState) -> PhysicalState:
     elif _has_physical_constraints(state, ground_artifact):
         constraint_files["physical"] = PHYSICAL_CONSTRAINTS_PATH
 
-    state["draft_artifact"] = {
-        "graph": graph.model_dump(mode="json"),
-        "constraint_files": constraint_files,
-        "checkpoint_files": {},
+    return {
+        "draft_artifact": {
+            "graph": graph.model_dump(mode="json"),
+            "constraint_files": constraint_files,
+            "checkpoint_files": {},
+        },
+        "events": [{"type": "physical.prepare"}],
     }
-    state["events"] = [*state.get("events", []), {"type": "physical.prepare"}]
-    return state
 
 
 def _has_physical_constraints(state: PhysicalState, ground_artifact: dict) -> bool:
