@@ -71,7 +71,44 @@ New tests:
 
 ### Chunk 2 — PR2 ledger product-pointers and mutation incrementality
 
-(Detailed file structure for Chunks 2/3/4 will be appended after Chunk 1 reviewer approves.)
+Source files (logic change):
+
+- `src/trace/stages/repair_tools.py`
+  - Constructor accepts `mutation_index_seed: int = 1`.
+  - `_next_mutation_path` uses the seeded index.
+  - `execute_mutation_file` lands a JSON snapshot to `<stage>/mutations/snapshots/attempt_N.json` (matching attempt id) on success and returns its path inside `summary.snapshot_path`.
+  - `inspect_graph(view="diff", against="previous_attempt"|"logical_reference")` added as a method; `_InspectGraphToolInput` extended with `against: str | None`.
+  - `MutationSummary` gains `snapshot_path: str | None` field.
+- `src/tgraph/operations/inspect/diff.py` — new pure diff routine: `diff(current: TGraph, baseline: TGraph) -> dict`.
+- `src/tgraph/operations/inspect/__init__.py` — register `view="diff"` dispatcher (delegates to `diff.py`).
+- `src/trace/stages/logical/nodes/repair.py` — `_build_repair_ledger_entry` accepts `produced_files`; new `_derive_produced_files(attempted_actions)` helper; new `_summary_one_line(...)` helpers (mutation / checkpoint variants).
+- `src/trace/stages/physical/nodes/repair.py` — same shape.
+- `src/trace/stages/logical/nodes/builder.py`, `physical/nodes/builder.py` — pass `mutation_index_seed` derived from `len(state.get("repair_history", []))` to `StageRepairTools`; for builder this is always 0+1=1, so no-op in practice. Keeping the parameter set explicitly for clarity.
+- `src/trace/stages/logical/nodes/repair.py`, `physical/nodes/repair.py` — pass `mutation_index_seed=len(state.get("repair_history", [])) + 1` to `StageRepairTools`; this ensures attempt indices strictly increase across reentries.
+- `src/trace/stages/logical/prompts/builder.md`, `physical/prompts/builder.md` — replace "Write one complete mutation file" guidance with incremental + diff-inspect guidance; for builder also reference the prepare-seeded node inventory.
+- `src/trace/stages/logical/prompts/repair.md`, `physical/prompts/repair.md` — replace mutation rewrite guidance with incremental guidance using `inspect_graph(view="diff", against="previous_attempt")`.
+
+Tests (add):
+
+- `tests/unit/tgraph/operations/test_inspect_diff.py` — `diff(current, baseline)` contract: added / removed / changed nodes, unchanged_count.
+- `tests/unit/stages/test_inspect_graph_diff.py` — `StageRepairTools.inspect_graph(view="diff", against="previous_attempt")` and `against="logical_reference"`.
+- `tests/unit/stages/test_mutation_snapshot.py` — `execute_mutation_file` writes the snapshot file; `MutationSummary.snapshot_path` populated.
+- `tests/unit/stages/test_mutation_index_seed.py` — attempt N continues across `StageRepairTools` re-construction.
+- `tests/unit/stages/test_produced_files.py` — `_derive_produced_files` path-precise pairing of `write_mutation_file` + `execute_mutation_file`, `summary_one_line` rendering.
+- `tests/unit/stages/test_recent_repair_ledger.py` — ledger context includes `produced_files` with snapshot_path.
+
+Tests (modify):
+
+- `tests/unit/stages/logical/test_repair_node.py` — assert `repair_history[-1]["produced_files"]` non-empty when a mutation was written + executed.
+- `tests/unit/stages/physical/test_physical_repair_node.py` — same.
+
+### Chunk 3 — PR3 LangGraph native convergence
+
+(Detailed task list will be appended after Chunk 2 reviewer approves.)
+
+### Chunk 4 — PR4 SqliteSaver checkpointer and escalation
+
+(Detailed task list will be appended after Chunk 3 reviewer approves.)
 
 ---
 
@@ -1518,4 +1555,1190 @@ PR1 chunk done.
 
 ---
 
-(Chunks 2 / 3 / 4 will be appended in subsequent revisions of this plan after Chunk 1 reviewer approves.)
+## Chunk 2: PR2 — Ledger Product-Pointers And Mutation Incrementality
+
+This chunk builds on PR1's `MutationSummary` and `_derive_op_counts`. After PR2 merges, the agent gets a deterministic ledger of what was produced in each repair round plus a diff inspect view for incremental mutations.
+
+**Branch / commit cadence:** ~12 commits, one per task.
+
+### Task 2.1: Add `mutation_index_seed`, snapshot landing, and `snapshot_path` in `MutationSummary`
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py`
+- Create test: `tests/unit/stages/test_mutation_snapshot.py`
+- Create test: `tests/unit/stages/test_mutation_index_seed.py`
+
+- [ ] **Step 1: Write failing tests**
+
+`tests/unit/stages/test_mutation_snapshot.py`:
+
+```python
+import json
+from pathlib import Path
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed_logical_graph_dict() -> dict:
+    return {
+        "stage": "logical",
+        "nodes": [{"id": "SW_DMZ", "type": "switch", "label": "SW_DMZ", "ports": []}],
+        "links": [],
+    }
+
+
+def test_execute_mutation_file_writes_snapshot(tmp_path):
+    artifact = {"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    write = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    tgraph.ensure_subnet('SW_DMZ', cidr='10.10.10.0/24')\n",
+        path="logical/mutations/attempt_1.py",
+    )
+    result = tools.execute_mutation_file(path=write["path"], validate=False)
+    snapshot_path = result["summary"]["snapshot_path"]
+    assert snapshot_path == "logical/mutations/snapshots/attempt_1.json"
+    assert (Path(tmp_path) / snapshot_path).exists()
+    snapshot = json.loads((Path(tmp_path) / snapshot_path).read_text(encoding="utf-8"))
+    assert snapshot["stage"] == "logical"
+
+
+def test_execute_mutation_file_failure_does_not_write_snapshot(tmp_path):
+    artifact = {"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    write = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    raise RuntimeError('boom')\n",
+        path="logical/mutations/attempt_1.py",
+    )
+    result = tools.execute_mutation_file(path=write["path"], validate=False)
+    assert result["ok"] is False
+    assert result["summary"]["snapshot_path"] is None
+    assert not (Path(tmp_path) / "logical/mutations/snapshots/attempt_1.json").exists()
+```
+
+`tests/unit/stages/test_mutation_index_seed.py`:
+
+```python
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed():
+    return {
+        "stage": "logical",
+        "nodes": [{"id": "A", "type": "computer", "label": "A", "ports": []}],
+        "links": [],
+    }
+
+
+def test_default_mutation_index_seed_is_one(tmp_path):
+    tools = StageRepairTools({"graph": _seed(), "constraint_files": {}, "checkpoint_files": {}}, support_file_root=str(tmp_path))
+    result = tools.write_mutation_file(content="def mutate(tgraph):\n    pass\n")
+    assert result["path"] == "logical/mutations/attempt_1.py"
+
+
+def test_mutation_index_seed_advances_attempt_number(tmp_path):
+    tools = StageRepairTools(
+        {"graph": _seed(), "constraint_files": {}, "checkpoint_files": {}},
+        support_file_root=str(tmp_path),
+        mutation_index_seed=3,
+    )
+    result = tools.write_mutation_file(content="def mutate(tgraph):\n    pass\n")
+    assert result["path"] == "logical/mutations/attempt_3.py"
+
+
+def test_mutation_index_seed_zero_falls_back_to_one(tmp_path):
+    tools = StageRepairTools(
+        {"graph": _seed(), "constraint_files": {}, "checkpoint_files": {}},
+        support_file_root=str(tmp_path),
+        mutation_index_seed=0,
+    )
+    result = tools.write_mutation_file(content="def mutate(tgraph):\n    pass\n")
+    assert result["path"] == "logical/mutations/attempt_1.py"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_mutation_snapshot.py tests/unit/stages/test_mutation_index_seed.py -v`
+Expected: FAIL — `mutation_index_seed` parameter doesn't exist; snapshot not landed; `summary.snapshot_path` absent.
+
+- [ ] **Step 3: Extend `MutationSummary` schema**
+
+In `src/trace/stages/repair_tools.py`, add field to `MutationSummary`:
+
+```python
+class MutationSummary(BaseModel):
+    stage: str
+    node_count: int
+    link_count: int
+    affected_node_ids: list[str]
+    affected_link_ids: list[str]
+    op_counts: dict[str, int]
+    snapshot_path: str | None = None
+```
+
+Update `from_operations` to optionally accept `snapshot_path: str | None = None` and pass it through.
+
+- [ ] **Step 4: Extend `StageRepairTools.__init__` with `mutation_index_seed`**
+
+```python
+def __init__(
+    self,
+    artifact: dict[str, Any],
+    *,
+    support_files: dict[str, str] | None = None,
+    support_file_root: str | None = None,
+    logical_reference_graph: TGraph | dict[str, Any] | None = None,
+    mutation_index_seed: int = 1,
+) -> None:
+    # ... existing init ...
+    self._mutation_index = max(1, mutation_index_seed)
+```
+
+- [ ] **Step 5: Land snapshot inside `execute_mutation_file` on success**
+
+```python
+def execute_mutation_file(self, *, path: str, validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
+    normalized = _safe_relative_path(path)
+    if normalized not in self._support_files:
+        return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
+    mutation_path = self._materialize_support_file(normalized)
+    result = execute_mutation_file(
+        self._graph_model(),
+        mutation_path=mutation_path,
+        validate=validate,
+        validation_context=self._validation_context(),
+    )
+    operations = list(result.operations or [])
+    if result.ok and result.graph is not None:
+        self._artifact["graph"] = result.graph.model_dump(mode="json")
+
+    snapshot_path: str | None = None
+    if result.ok and result.graph is not None:
+        attempt_id = self._attempt_id_for_mutation_path(normalized)
+        if attempt_id is not None:
+            snapshot_path = f"{result.graph.stage}/mutations/snapshots/attempt_{attempt_id}.json"
+            self._write_support_file(
+                snapshot_path,
+                json.dumps(result.graph.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            )
+
+    graph_model = self._graph_model()
+    summary = MutationSummary.from_operations(
+        stage=graph_model.stage,
+        node_count=len(graph_model.nodes),
+        link_count=len(graph_model.links),
+        operations=operations,
+        snapshot_path=snapshot_path,
+    )
+    payload: dict[str, Any] = {
+        "ok": result.ok,
+        "operations": [dict(op) for op in operations],
+        "summary": summary.model_dump(mode="json"),
+    }
+    if not result.ok:
+        payload["issues"] = [issue.model_dump(mode="json") for issue in result.issues]
+    if include_graph and result.graph is not None:
+        payload["graph"] = result.graph.model_dump(mode="json")
+    return payload
+```
+
+Add helper:
+
+```python
+def _attempt_id_for_mutation_path(self, path: str) -> int | None:
+    # path shape: "<stage>/mutations/attempt_<N>.py"
+    import re
+    match = re.match(r"^[^/]+/mutations/attempt_(\d+)\.py$", path)
+    if not match:
+        return None
+    return int(match.group(1))
+```
+
+Note: `json` is already imported at the top of `repair_tools.py` (used by `filtered_view` in Chunk 1's edits). If not, add `import json` near the existing `from pathlib import Path` line.
+
+- [ ] **Step 6: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_mutation_snapshot.py tests/unit/stages/test_mutation_index_seed.py -v`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_mutation_snapshot.py tests/unit/stages/test_mutation_index_seed.py
+git commit -m "feat(repair_tools): land mutation snapshot and support mutation_index_seed"
+```
+
+### Task 2.2: Implement `diff(current, baseline)` pure routine
+
+**Files:**
+- Create: `src/tgraph/operations/inspect/diff.py`
+- Modify: `src/tgraph/operations/inspect/__init__.py` (dispatch `view="diff"`)
+- Create test: `tests/unit/tgraph/operations/test_inspect_diff.py`
+
+- [ ] **Step 1: Inventory the existing inspect dispatcher**
+
+Run: `rg -n "view ==" src/tgraph/operations/inspect` to discover the existing dispatch pattern. Read the resulting `__init__.py` to understand how to add a new view.
+
+- [ ] **Step 2: Write failing tests**
+
+```python
+# tests/unit/tgraph/operations/test_inspect_diff.py
+from tgraph import TGraph
+from tgraph.operations.inspect.diff import diff
+
+
+def _build(stage, nodes, links=None):
+    return TGraph.model_validate({
+        "stage": stage,
+        "nodes": nodes,
+        "links": links or [],
+    })
+
+
+def test_diff_reports_added_nodes():
+    baseline = _build("logical", [{"id": "A", "type": "computer", "label": "A", "ports": []}])
+    current = _build(
+        "logical",
+        [
+            {"id": "A", "type": "computer", "label": "A", "ports": []},
+            {"id": "B", "type": "switch", "label": "B", "ports": []},
+        ],
+    )
+    result = diff(current, baseline)
+    assert result["added_nodes"] == ["B"]
+    assert result["removed_nodes"] == []
+    assert result["changed_nodes"] == []
+    assert result["unchanged_count"] == 1
+
+
+def test_diff_reports_removed_nodes():
+    baseline = _build(
+        "logical",
+        [
+            {"id": "A", "type": "computer", "label": "A", "ports": []},
+            {"id": "B", "type": "switch", "label": "B", "ports": []},
+        ],
+    )
+    current = _build("logical", [{"id": "A", "type": "computer", "label": "A", "ports": []}])
+    result = diff(current, baseline)
+    assert result["removed_nodes"] == ["B"]
+    assert result["unchanged_count"] == 1
+
+
+def test_diff_reports_changed_fields():
+    baseline = _build(
+        "physical",
+        [{"id": "FIREWALL", "type": "computer", "label": "FIREWALL", "ports": [], "image": None, "flavor": None}],
+    )
+    current = _build(
+        "physical",
+        [
+            {
+                "id": "FIREWALL",
+                "type": "computer",
+                "label": "FIREWALL",
+                "ports": [],
+                "image": {"id": "img_pfsense", "name": "pfsense"},
+                "flavor": {"vcpu": 2, "ram": 2048, "disk": 10},
+            }
+        ],
+    )
+    result = diff(current, baseline)
+    assert result["added_nodes"] == []
+    assert result["removed_nodes"] == []
+    assert result["changed_nodes"] == [{"id": "FIREWALL", "fields_changed": ["flavor", "image"]}]
+
+
+def test_diff_ignores_field_order_in_ports():
+    baseline = _build(
+        "logical",
+        [{"id": "A", "type": "computer", "label": "A", "ports": [{"id": "_B-1"}]}],
+    )
+    current = _build(
+        "logical",
+        [{"id": "A", "type": "computer", "label": "A", "ports": [{"id": "_B-1"}]}],
+    )
+    result = diff(current, baseline)
+    assert result["unchanged_count"] == 1
+    assert result["changed_nodes"] == []
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `pytest tests/unit/tgraph/operations/test_inspect_diff.py -v`
+Expected: FAIL — `tgraph.operations.inspect.diff` module not found.
+
+- [ ] **Step 4: Implement `diff.py`**
+
+```python
+# src/tgraph/operations/inspect/diff.py
+from __future__ import annotations
+
+from typing import Any
+
+from tgraph.core.graph import TGraph
+
+_NODE_FIELDS = ("type", "label", "image", "flavor", "ports", "metadata")
+
+
+def diff(current: TGraph, baseline: TGraph) -> dict[str, Any]:
+    current_nodes = {node.id: node for node in current.nodes}
+    baseline_nodes = {node.id: node for node in baseline.nodes}
+
+    added = sorted(current_nodes.keys() - baseline_nodes.keys())
+    removed = sorted(baseline_nodes.keys() - current_nodes.keys())
+
+    changed: list[dict[str, Any]] = []
+    unchanged = 0
+    for node_id in sorted(current_nodes.keys() & baseline_nodes.keys()):
+        cur = current_nodes[node_id].model_dump(mode="json")
+        base = baseline_nodes[node_id].model_dump(mode="json")
+        diff_fields = sorted({field for field in _NODE_FIELDS if cur.get(field) != base.get(field)})
+        if diff_fields:
+            changed.append({"id": node_id, "fields_changed": diff_fields})
+        else:
+            unchanged += 1
+
+    return {
+        "added_nodes": added,
+        "removed_nodes": removed,
+        "changed_nodes": changed,
+        "unchanged_count": unchanged,
+    }
+```
+
+- [ ] **Step 5: Register `view="diff"` dispatcher in `src/tgraph/operations/inspect/__init__.py`**
+
+Add to the existing dispatcher (the file already routes `view` strings to handlers):
+
+```python
+from tgraph.operations.inspect.diff import diff as _diff_view
+
+
+def inspect_graph(graph: TGraph, *, view: str = "summary", **kwargs: Any) -> dict[str, Any]:
+    # ... existing branches ...
+    if view == "diff":
+        baseline = kwargs.get("baseline")
+        if baseline is None:
+            raise ValueError("inspect_graph(view='diff') requires a baseline TGraph")
+        return _diff_view(graph, baseline)
+    # ... default ...
+```
+
+If the existing `__init__.py` uses a dispatch table rather than if/elif chain, register `"diff": _diff_view_with_baseline_unpack` accordingly. Read the existing dispatcher first; mirror its style.
+
+- [ ] **Step 6: Run tests to verify pass**
+
+Run: `pytest tests/unit/tgraph/operations/test_inspect_diff.py -v`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/tgraph/operations/inspect/diff.py src/tgraph/operations/inspect/__init__.py tests/unit/tgraph/operations/test_inspect_diff.py
+git commit -m "feat(tgraph_inspect): add diff view for incremental change detection"
+```
+
+### Task 2.3: Wire `inspect_graph(view="diff", against=...)` into `StageRepairTools`
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py` (`_InspectGraphToolInput` adds `against`; `inspect_graph` method dispatches; tool docstring)
+- Create test: `tests/unit/stages/test_inspect_graph_diff.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_inspect_graph_diff.py
+import json
+from pathlib import Path
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _physical(nodes=None, links=None):
+    return {
+        "stage": "physical",
+        "nodes": nodes or [],
+        "links": links or [],
+    }
+
+
+def _logical(nodes=None, links=None):
+    return {
+        "stage": "logical",
+        "nodes": nodes or [],
+        "links": links or [],
+    }
+
+
+def test_inspect_graph_diff_against_logical_reference():
+    logical_ref = _logical([{"id": "FIREWALL", "type": "computer", "label": "FIREWALL", "ports": []}])
+    physical_artifact = {
+        "graph": _physical(
+            [
+                {
+                    "id": "FIREWALL",
+                    "type": "computer",
+                    "label": "FIREWALL",
+                    "ports": [],
+                    "image": {"id": "img_pfsense", "name": "pfsense"},
+                    "flavor": {"vcpu": 2, "ram": 2048, "disk": 10},
+                }
+            ]
+        ),
+        "constraint_files": {},
+        "checkpoint_files": {},
+    }
+    tools = StageRepairTools(physical_artifact, logical_reference_graph=logical_ref)
+    result = tools.inspect_graph(view="diff", against="logical_reference")
+    assert result["changed_nodes"] == [{"id": "FIREWALL", "fields_changed": ["flavor", "image"]}]
+
+
+def test_inspect_graph_diff_against_previous_attempt_uses_snapshot(tmp_path):
+    artifact = {"graph": _logical([{"id": "A", "type": "computer", "label": "A", "ports": []}]), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    write = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    tgraph.ensure_node('B', type='switch', label='B')\n",
+        path="logical/mutations/attempt_1.py",
+    )
+    tools.execute_mutation_file(path=write["path"], validate=False)
+    # Now graph has A + B; baseline snapshot has A + B too (post-mutation snapshot).
+    # Append another mutation to add C.
+    write2 = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    tgraph.ensure_node('C', type='computer', label='C')\n",
+        path="logical/mutations/attempt_2.py",
+    )
+    tools.execute_mutation_file(path=write2["path"], validate=False)
+    # The previous_attempt baseline is attempt_2's snapshot which equals the current state,
+    # so diff should be empty. Set baseline to attempt_1's snapshot manually to verify diff.
+    result = tools.inspect_graph(view="diff", against="previous_attempt", baseline_attempt_id=1)
+    # Against attempt_1 snapshot (A + B), current state (A + B + C) shows C as added.
+    assert "C" in result["added_nodes"]
+
+
+def test_inspect_graph_diff_previous_attempt_requires_existing_snapshot(tmp_path):
+    artifact = {"graph": _logical([{"id": "A", "type": "computer", "label": "A", "ports": []}]), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    result = tools.inspect_graph(view="diff", against="previous_attempt")
+    assert result.get("ok") is False
+    assert "no previous attempt snapshot" in result.get("error", {}).get("message", "").lower()
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_inspect_graph_diff.py -v`
+Expected: FAIL — `against` parameter does not exist on inspect_graph yet.
+
+- [ ] **Step 3: Extend `_InspectGraphToolInput` and `inspect_graph` method**
+
+```python
+class _InspectGraphToolInput(BaseModel):
+    view: str = "summary"
+    node_id: str | None = None
+    port_id: str | None = None
+    source: str | None = None
+    target: str | None = None
+    against: str | None = None
+    baseline_attempt_id: int | None = None
+
+
+def inspect_graph(
+    self,
+    *,
+    view: str = "summary",
+    against: str | None = None,
+    baseline_attempt_id: int | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    if view == "diff":
+        baseline_graph = self._resolve_diff_baseline(against=against, baseline_attempt_id=baseline_attempt_id)
+        if isinstance(baseline_graph, dict) and baseline_graph.get("ok") is False:
+            return baseline_graph
+        return inspect_graph(self._graph_model(), view="diff", baseline=baseline_graph)
+    return inspect_graph(self._graph_model(), view=view, **kwargs)
+
+
+def _resolve_diff_baseline(
+    self,
+    *,
+    against: str | None,
+    baseline_attempt_id: int | None,
+) -> Any:
+    if against == "logical_reference":
+        if self._logical_reference_graph is None:
+            return {"ok": False, "error": {"message": "logical_reference graph not provided"}}
+        return self._logical_reference_graph
+    if against in ("previous_attempt", None):
+        stage = self._graph_model().stage
+        snapshot_prefix = f"{stage}/mutations/snapshots/attempt_"
+        if baseline_attempt_id is not None:
+            path = f"{snapshot_prefix}{baseline_attempt_id}.json"
+            if path not in self._support_files:
+                return {"ok": False, "error": {"message": f"snapshot not found: {path}"}}
+            return TGraph.model_validate(json.loads(self._support_files[path]))
+        candidates = sorted(
+            (key for key in self._support_files if key.startswith(snapshot_prefix) and key.endswith(".json")),
+            key=lambda k: int(k.rsplit("_", 1)[-1].split(".")[0]),
+        )
+        if not candidates:
+            return {"ok": False, "error": {"message": "no previous attempt snapshot available"}}
+        return TGraph.model_validate(json.loads(self._support_files[candidates[-1]]))
+    return {"ok": False, "error": {"message": f"unknown against: {against!r}"}}
+```
+
+(Note: the existing import alias `from tgraph import ... inspect_graph` is shadowed inside the method by the call to the module-level `inspect_graph`. Rename the local import to `from tgraph import inspect_graph as _inspect_graph_view` at the top of the file and use `_inspect_graph_view(...)` inside the method to avoid name collision with the method.)
+
+- [ ] **Step 4: Update tool wrapper to forward new params**
+
+```python
+@tool("inspect_graph", args_schema=_InspectGraphToolInput)
+def inspect_graph_tool(
+    view: str = "summary",
+    node_id: str | None = None,
+    port_id: str | None = None,
+    source: str | None = None,
+    target: str | None = None,
+    against: str | None = None,
+    baseline_attempt_id: int | None = None,
+) -> dict[str, Any]:
+    """Inspect the current graph. Views: summary, node, links, path, cidrs, diff. For view='diff' pass against='previous_attempt' or 'logical_reference' (and optionally baseline_attempt_id for previous_attempt)."""
+    kwargs = {"node_id": node_id, "port_id": port_id, "source": source, "target": target}
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
+    return self.inspect_graph(view=view, against=against, baseline_attempt_id=baseline_attempt_id, **kwargs)
+```
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_inspect_graph_diff.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_inspect_graph_diff.py
+git commit -m "feat(repair_tools): wire inspect_graph diff view into stage tools"
+```
+
+### Task 2.4: Implement `_derive_produced_files` helper (path-precise pairing)
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py` (add the helper at module level, shared between logical and physical repair modules)
+- Create test: `tests/unit/stages/test_produced_files.py`
+
+- [ ] **Step 1: Write failing tests covering NI-2 path-precise pairing**
+
+```python
+# tests/unit/stages/test_produced_files.py
+from trace.stages.repair_tools import _derive_produced_files
+
+
+def _attempt(tool_name, args, ok=True, result=None):
+    entry = {"tool": tool_name, "args": args, "ok": ok}
+    if result is not None:
+        entry["result"] = result
+    return entry
+
+
+def test_mutation_paired_with_execute_by_exact_path():
+    attempts = [
+        _attempt("write_mutation_file", {"path": "logical/mutations/attempt_1.py", "content": "def mutate(tgraph): pass\n"}),
+        _attempt("execute_mutation_file", {"path": "logical/mutations/attempt_1.py"}, ok=True, result={
+            "ok": True,
+            "operations": [{"op": "set_image", "node": "A"}, {"op": "set_image", "node": "B"}],
+            "summary": {
+                "op_counts": {"set_image": 2},
+                "affected_node_ids": ["A", "B"],
+                "snapshot_path": "logical/mutations/snapshots/attempt_1.json",
+            },
+        }),
+    ]
+    produced = _derive_produced_files(attempts)
+    assert len(produced) == 1
+    assert produced[0]["path"] == "logical/mutations/attempt_1.py"
+    assert produced[0]["file_kind"] == "mutation"
+    assert produced[0]["node_targets"] == ["A", "B"]
+    assert produced[0]["op_counts"] == {"set_image": 2}
+    assert produced[0]["snapshot_path"] == "logical/mutations/snapshots/attempt_1.json"
+    assert "set_image x2 on [A, B]" in produced[0]["summary_one_line"]
+
+
+def test_pairing_uses_exact_path_match_not_adjacency():
+    # NI-2: out-of-order: write A, write B, execute B, execute A.
+    attempts = [
+        _attempt("write_mutation_file", {"path": "logical/mutations/attempt_1.py", "content": "x"}),
+        _attempt("write_mutation_file", {"path": "logical/mutations/attempt_2.py", "content": "y"}),
+        _attempt("execute_mutation_file", {"path": "logical/mutations/attempt_2.py"}, ok=True, result={
+            "ok": True,
+            "operations": [{"op": "ensure_subnet", "node": "SW"}],
+            "summary": {"op_counts": {"ensure_subnet": 1}, "affected_node_ids": ["SW"], "snapshot_path": "logical/mutations/snapshots/attempt_2.json"},
+        }),
+        _attempt("execute_mutation_file", {"path": "logical/mutations/attempt_1.py"}, ok=True, result={
+            "ok": True,
+            "operations": [{"op": "ensure_node", "node": "A"}],
+            "summary": {"op_counts": {"ensure_node": 1}, "affected_node_ids": ["A"], "snapshot_path": "logical/mutations/snapshots/attempt_1.json"},
+        }),
+    ]
+    produced = _derive_produced_files(attempts)
+    by_path = {p["path"]: p for p in produced}
+    assert by_path["logical/mutations/attempt_1.py"]["node_targets"] == ["A"]
+    assert by_path["logical/mutations/attempt_2.py"]["node_targets"] == ["SW"]
+
+
+def test_mutation_written_but_not_executed_has_empty_op_counts():
+    attempts = [
+        _attempt("write_mutation_file", {"path": "logical/mutations/attempt_1.py", "content": "x"}),
+    ]
+    produced = _derive_produced_files(attempts)
+    assert produced[0]["op_counts"] == {}
+    assert produced[0]["node_targets"] == []
+    assert produced[0]["snapshot_path"] is None
+
+
+def test_checkpoint_file_derived_with_function_summary():
+    attempts = [
+        _attempt(
+            "write_checkpoint_file",
+            {
+                "path": "logical/checkpoints.py",
+                "content": "def check_lc1(tgraph):\n    return []\n\ndef check_lc17(tgraph):\n    return []\n",
+            },
+        ),
+    ]
+    produced = _derive_produced_files(attempts)
+    assert len(produced) == 1
+    assert produced[0]["file_kind"] == "checkpoint"
+    assert produced[0]["node_targets"] == []
+    assert "checkpoint defines: check_lc1, check_lc17" in produced[0]["summary_one_line"]
+
+
+def test_pairing_picks_latest_successful_execute_for_same_path():
+    # If a path was executed twice, take the latest successful execute.
+    attempts = [
+        _attempt("write_mutation_file", {"path": "logical/mutations/attempt_1.py", "content": "x"}),
+        _attempt("execute_mutation_file", {"path": "logical/mutations/attempt_1.py"}, ok=False, result={
+            "ok": False,
+            "operations": [],
+            "summary": {"op_counts": {}, "affected_node_ids": [], "snapshot_path": None},
+        }),
+        _attempt("execute_mutation_file", {"path": "logical/mutations/attempt_1.py"}, ok=True, result={
+            "ok": True,
+            "operations": [{"op": "ensure_node", "node": "A"}],
+            "summary": {"op_counts": {"ensure_node": 1}, "affected_node_ids": ["A"], "snapshot_path": "logical/mutations/snapshots/attempt_1.json"},
+        }),
+    ]
+    produced = _derive_produced_files(attempts)
+    assert produced[0]["node_targets"] == ["A"]
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_produced_files.py -v`
+Expected: FAIL — `_derive_produced_files` doesn't exist yet.
+
+- [ ] **Step 3: Implement `_derive_produced_files`**
+
+Add to `src/trace/stages/repair_tools.py` (module level):
+
+```python
+import re
+from typing import Iterable
+
+
+_CHECK_FN_PATTERN = re.compile(r"^\s*def\s+(check_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
+
+
+def _derive_produced_files(attempted_actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Index latest successful execute by exact mutation path.
+    latest_exec_by_path: dict[str, dict[str, Any]] = {}
+    for action in attempted_actions:
+        if action.get("tool") != "execute_mutation_file":
+            continue
+        path = (action.get("args") or {}).get("path")
+        if not isinstance(path, str):
+            continue
+        if action.get("ok") is True:
+            latest_exec_by_path[path] = action
+
+    produced: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for action in attempted_actions:
+        tool_name = action.get("tool")
+        args = action.get("args") or {}
+
+        if tool_name == "write_mutation_file":
+            path = args.get("path")
+            if not isinstance(path, str) or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            paired_execute = latest_exec_by_path.get(path)
+            summary_dict = ((paired_execute or {}).get("result") or {}).get("summary") or {}
+            op_counts = summary_dict.get("op_counts") or {}
+            node_targets = list(summary_dict.get("affected_node_ids") or [])
+            snapshot_path = summary_dict.get("snapshot_path")
+            produced.append(
+                {
+                    "path": path,
+                    "file_kind": "mutation",
+                    "node_targets": node_targets,
+                    "op_counts": op_counts,
+                    "summary_one_line": _summary_one_line_for_mutation(op_counts, node_targets),
+                    "snapshot_path": snapshot_path,
+                }
+            )
+
+        elif tool_name == "write_checkpoint_file":
+            path = args.get("path")
+            if not isinstance(path, str) or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            content = args.get("content") or ""
+            fn_names = _CHECK_FN_PATTERN.findall(content)
+            produced.append(
+                {
+                    "path": path,
+                    "file_kind": "checkpoint",
+                    "node_targets": [],
+                    "op_counts": {},
+                    "summary_one_line": _summary_one_line_for_checkpoint(fn_names),
+                    "snapshot_path": None,
+                }
+            )
+
+    return produced
+
+
+def _summary_one_line_for_mutation(op_counts: dict[str, int], node_targets: list[str]) -> str:
+    if not op_counts:
+        return "mutation written; not yet executed"
+    op_part = ", ".join(f"{op} x{count}" for op, count in sorted(op_counts.items()))
+    if not node_targets:
+        return op_part
+    display = node_targets[:5]
+    tail = f", ... +{len(node_targets) - 5} more" if len(node_targets) > 5 else ""
+    return f"{op_part} on [{', '.join(display)}{tail}]"
+
+
+def _summary_one_line_for_checkpoint(fn_names: list[str]) -> str:
+    if not fn_names:
+        return "checkpoint defines: <unknown>"
+    display = fn_names[:5]
+    tail = f", ... +{len(fn_names) - 5} more" if len(fn_names) > 5 else ""
+    return f"checkpoint defines: {', '.join(display)}{tail}"
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_produced_files.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_produced_files.py
+git commit -m "feat(repair_tools): derive produced_files from tool attempts with path-precise pairing"
+```
+
+### Task 2.5: Extend `_build_repair_ledger_entry` and prompt section in logical/physical repair
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/repair.py` (`_build_repair_ledger_entry` accepts `produced_files`; `_summarize_recent_repair_ledger` exposes them; `repair_node` derives via `_derive_produced_files`)
+- Modify: `src/trace/stages/physical/nodes/repair.py` (same shape)
+- Create test: `tests/unit/stages/test_recent_repair_ledger.py`
+- Modify test: `tests/unit/stages/logical/test_repair_node.py` (assert `produced_files` populated)
+- Modify test: `tests/unit/stages/physical/test_physical_repair_node.py` (same)
+
+- [ ] **Step 1: Write failing tests for the ledger entry shape**
+
+`tests/unit/stages/test_recent_repair_ledger.py`:
+
+```python
+from trace.stages.logical.nodes.repair import _build_repair_ledger_entry, _summarize_recent_repair_ledger
+
+
+def test_ledger_entry_includes_produced_files():
+    attempted = [
+        {
+            "tool": "write_mutation_file",
+            "args": {"path": "logical/mutations/attempt_1.py", "content": "def mutate(t): pass\n"},
+            "ok": True,
+        },
+        {
+            "tool": "execute_mutation_file",
+            "args": {"path": "logical/mutations/attempt_1.py"},
+            "ok": True,
+            "result": {
+                "ok": True,
+                "operations": [{"op": "ensure_node", "node": "A"}],
+                "summary": {
+                    "op_counts": {"ensure_node": 1},
+                    "affected_node_ids": ["A"],
+                    "snapshot_path": "logical/mutations/snapshots/attempt_1.json",
+                },
+            },
+        },
+    ]
+    entry = _build_repair_ledger_entry(
+        round_index=1,
+        issues_before={"issues": [{"details": {"issue_kind": "missing_link"}}]},
+        issues_after={"issues": []},
+        attempted_actions=attempted,
+    )
+    assert entry["produced_files"] == [
+        {
+            "path": "logical/mutations/attempt_1.py",
+            "file_kind": "mutation",
+            "node_targets": ["A"],
+            "op_counts": {"ensure_node": 1},
+            "summary_one_line": "ensure_node x1 on [A]",
+            "snapshot_path": "logical/mutations/snapshots/attempt_1.json",
+        }
+    ]
+
+
+def test_recent_repair_ledger_summary_includes_produced_files():
+    prior = [
+        {
+            "round": 1,
+            "issue_kinds_before": ["missing_link"],
+            "resolved_issue_kinds": ["missing_link"],
+            "remaining_issue_kinds": [],
+            "new_issue_kinds": [],
+            "attempted_actions": [],
+            "failed_actions": [],
+            "produced_files": [
+                {"path": "logical/mutations/attempt_1.py", "file_kind": "mutation", "node_targets": ["A"], "op_counts": {"ensure_node": 1}, "summary_one_line": "ensure_node x1 on [A]", "snapshot_path": "logical/mutations/snapshots/attempt_1.json"}
+            ],
+        }
+    ]
+    summary = _summarize_recent_repair_ledger(prior)
+    assert summary[0]["produced_files"][0]["path"] == "logical/mutations/attempt_1.py"
+```
+
+In `tests/unit/stages/logical/test_repair_node.py` add at the end of `test_logical_repair_node_uses_mutation_file_tools_and_writes_back_artifact` (rename if needed):
+
+```python
+assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
+assert result["repair_history"][-1]["produced_files"][0]["path"] == "logical/mutations/attempt_1.py"
+```
+
+In `tests/unit/stages/physical/test_physical_repair_node.py::test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact`:
+
+```python
+assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
+assert result["repair_history"][-1]["produced_files"][0]["path"] == "physical/mutations/attempt_1.py"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_recent_repair_ledger.py tests/unit/stages/logical/test_repair_node.py tests/unit/stages/physical/test_physical_repair_node.py -v`
+Expected: FAIL — `produced_files` field not produced yet.
+
+- [ ] **Step 3: Modify `_build_repair_ledger_entry` in `src/trace/stages/logical/nodes/repair.py`**
+
+```python
+from trace.stages.repair_tools import _derive_produced_files
+
+
+def _build_repair_ledger_entry(
+    *,
+    round_index: int,
+    issues_before: dict[str, Any],
+    issues_after: dict[str, Any],
+    attempted_actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    before = _issue_kinds(issues_before)
+    after = _issue_kinds(issues_after)
+    before_set = set(before)
+    after_set = set(after)
+    failed_actions = [item for item in attempted_actions if item.get("ok") is False]
+    return {
+        "round": round_index,
+        "mode": "agent",
+        "issue_count": len(issues_before.get("issues", [])),
+        "issue_kinds_before": before,
+        "resolved_issue_kinds": sorted(before_set - after_set),
+        "remaining_issue_kinds": after,
+        "new_issue_kinds": sorted(after_set - before_set),
+        "attempted_actions": attempted_actions,
+        "failed_actions": failed_actions,
+        "produced_files": _derive_produced_files(attempted_actions),
+    }
+```
+
+And update `_summarize_recent_repair_ledger` to include `produced_files`:
+
+```python
+def _summarize_recent_repair_ledger(repair_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for item in repair_history[-LEDGER_WINDOW:]:
+        summary.append(
+            {
+                "round": item.get("round"),
+                "issue_kinds_before": item.get("issue_kinds_before", []),
+                "resolved_issue_kinds": item.get("resolved_issue_kinds", []),
+                "remaining_issue_kinds": item.get("remaining_issue_kinds", []),
+                "new_issue_kinds": item.get("new_issue_kinds", []),
+                "attempted_actions": item.get("attempted_actions", []),
+                "failed_actions": item.get("failed_actions", []),
+                "produced_files": item.get("produced_files", []),
+            }
+        )
+    return summary
+```
+
+- [ ] **Step 4: Apply identical changes to `src/trace/stages/physical/nodes/repair.py`**
+
+Same imports, same helpers, same ledger entry shape. (Avoid copy-paste drift: if both modules grow further in PR3, extract a shared helper module; for PR2 keep them parallel.)
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_recent_repair_ledger.py tests/unit/stages/logical tests/unit/stages/physical -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/logical/nodes/repair.py src/trace/stages/physical/nodes/repair.py tests/unit/stages/test_recent_repair_ledger.py tests/unit/stages/logical/test_repair_node.py tests/unit/stages/physical/test_physical_repair_node.py
+git commit -m "feat(repair): record produced_files in repair_history ledger"
+```
+
+### Task 2.6: Wire `mutation_index_seed` into all builder/repair callsites
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/builder.py` (already uses no mutation_index — pass `mutation_index_seed=1` explicitly for symmetry)
+- Modify: `src/trace/stages/physical/nodes/builder.py` (same)
+- Modify: `src/trace/stages/logical/nodes/repair.py` (compute seed from repair_history length)
+- Modify: `src/trace/stages/physical/nodes/repair.py` (same)
+- Modify test: `tests/unit/stages/test_mutation_index_seed.py` (add integration tests asserting seed across node reentry)
+
+- [ ] **Step 1: Write failing integration test for repair node reentry**
+
+Append to `tests/unit/stages/test_mutation_index_seed.py`:
+
+```python
+def test_repair_node_passes_seeded_index(monkeypatch):
+    captured = {}
+
+    real_cls = __import__("trace.stages.repair_tools", fromlist=["StageRepairTools"]).StageRepairTools
+
+    class SpyStageRepairTools(real_cls):
+        def __init__(self, *args, mutation_index_seed: int = 1, **kwargs):
+            captured["mutation_index_seed"] = mutation_index_seed
+            super().__init__(*args, mutation_index_seed=mutation_index_seed, **kwargs)
+
+    monkeypatch.setattr("trace.stages.logical.nodes.repair.StageRepairTools", SpyStageRepairTools)
+
+    from trace.stages.logical.nodes.repair import repair_node
+
+    state = {
+        "draft_artifact": {
+            "graph": {"stage": "logical", "nodes": [{"id": "A", "type": "computer", "label": "A", "ports": []}], "links": []},
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+        "support_files": {},
+        "evaluation_report": {"ok": False, "issues": []},
+        "attempt": 0,
+        "repair_history": [{}, {}],  # 2 prior rounds → expected seed = 3
+        "events": [],
+    }
+
+    class FakeClient:
+        def invoke_agent(self, **_):
+            return {"messages": []}
+
+    repair_node(state, FakeClient())
+    assert captured["mutation_index_seed"] == 3
+```
+
+- [ ] **Step 2: Run test to verify fail**
+
+Run: `pytest tests/unit/stages/test_mutation_index_seed.py::test_repair_node_passes_seeded_index -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Pass seeded index in both repair nodes**
+
+In `src/trace/stages/logical/nodes/repair.py`:
+
+```python
+repair_tools = StageRepairTools(
+    state["draft_artifact"],
+    support_files=state.get("support_files", {}),
+    support_file_root=state.get("support_file_root"),
+    mutation_index_seed=len(state.get("repair_history", [])) + 1,
+)
+```
+
+Same in `src/trace/stages/physical/nodes/repair.py`.
+
+- [ ] **Step 4: Pass `mutation_index_seed=1` explicitly in both builders (documentation parity)**
+
+In `src/trace/stages/logical/nodes/builder.py` and `physical/nodes/builder.py`, where `StageRepairTools(...)` is constructed, add the keyword. Either of these patterns is acceptable:
+
+```python
+tools = StageRepairTools(
+    artifact,
+    support_files=state.get("support_files", {}),
+    support_file_root=state.get("support_file_root"),
+    mutation_index_seed=1,
+)
+```
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/logical/nodes src/trace/stages/physical/nodes tests/unit/stages/test_mutation_index_seed.py
+git commit -m "feat(stages): seed StageRepairTools mutation index across node re-entries"
+```
+
+### Task 2.7: Update builder prompts for incremental mutations and inventory awareness
+
+**Files:**
+- Modify: `src/trace/stages/logical/prompts/builder.md`
+- Modify: `src/trace/stages/physical/prompts/builder.md`
+- Modify: `tests/unit/stages/test_prompts_surface.py` (assertions)
+
+- [ ] **Step 1: Write failing prompt-content tests**
+
+Append to `tests/unit/stages/test_prompts_surface.py`:
+
+```python
+def test_logical_builder_prompt_uses_incremental_guidance():
+    text = (PROMPT_ROOT / "logical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "First inspect current graph" in text or "inspect the current graph" in text.lower()
+    assert "incremental" in text.lower() or "only the ensure" in text.lower()
+
+
+def test_physical_builder_prompt_uses_incremental_guidance():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "First inspect current graph" in text or "inspect the current graph" in text.lower()
+    assert "prepare" in text.lower() and "inventory" in text.lower()
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -k "incremental_guidance or inventory" -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Replace mutation guidance in `logical/prompts/builder.md`**
+
+Find the line that previously said something like "Write one complete mutation file, normally `logical/mutations/build.py`". Replace with:
+
+```markdown
+
+## Mutation Strategy
+
+First inspect the current graph state. Then write only the `ensure_*` / `set_*` calls that change something — skip operations whose target state already matches. The `TGraphEditor` operations are idempotent, but writing redundant calls wastes context.
+
+If this is not the first attempt within this stage run, call `inspect_graph(view="diff", against="previous_attempt")` before authoring to see what changed since the last successful mutation.
+```
+
+- [ ] **Step 4: Replace mutation guidance in `physical/prompts/builder.md`**
+
+Append (or replace, depending on existing content):
+
+```markdown
+
+## Mutation Strategy
+
+First inspect the current graph state. Then write only the `ensure_*` / `set_*` calls that change something — skip operations whose target state already matches.
+
+Stay aligned with the prepare-seeded node inventory: every physical node was already created during the prepare phase. Your job is to set `image` and `flavor` on those nodes; do not invent new nodes or rewrite the inventory.
+
+If this is not the first attempt within this stage run, call `inspect_graph(view="diff", against="previous_attempt")` before authoring.
+```
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/logical/prompts/builder.md src/trace/stages/physical/prompts/builder.md tests/unit/stages/test_prompts_surface.py
+git commit -m "docs(builder): switch to incremental mutation guidance with diff inspection"
+```
+
+### Task 2.8: Update repair prompts for diff-inspection-driven incrementality
+
+**Files:**
+- Modify: `src/trace/stages/logical/prompts/repair.md`
+- Modify: `src/trace/stages/physical/prompts/repair.md`
+- Modify: `tests/unit/stages/test_prompts_surface.py` (assertions)
+
+- [ ] **Step 1: Write failing tests**
+
+Append to `tests/unit/stages/test_prompts_surface.py`:
+
+```python
+def test_logical_repair_prompt_mentions_diff_against_previous_attempt():
+    text = (PROMPT_ROOT / "logical" / "prompts" / "repair.md").read_text(encoding="utf-8")
+    assert "against=" in text or "previous_attempt" in text
+
+
+def test_physical_repair_prompt_mentions_diff_against_previous_attempt():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "repair.md").read_text(encoding="utf-8")
+    assert "against=" in text or "previous_attempt" in text
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -k "diff_against" -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Append diff-inspection guidance to both repair prompts**
+
+To both `logical/prompts/repair.md` and `physical/prompts/repair.md`, append (before the final-message constraint from Chunk 1):
+
+```markdown
+
+## Incremental Repair
+
+Before authoring a new mutation file, call `inspect_graph(view="diff", against="previous_attempt")` to see what the last successful mutation already accomplished. Only encode the deltas the current evaluation report requires — do not rewrite the whole graph.
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/logical/prompts/repair.md src/trace/stages/physical/prompts/repair.md tests/unit/stages/test_prompts_surface.py
+git commit -m "docs(repair): instruct agents to diff-against-previous-attempt before authoring"
+```
+
+### Task 2.9: Verify full test suite and demo smoke
+
+- [ ] **Step 1: Full unit suite**
+
+Run: `pytest -q`
+Expected: all green.
+
+- [ ] **Step 2: Demo smoke**
+
+```powershell
+$env:LANGSMITH_TRACING="false"
+trace run tests/demo/demo.md --run-id pr2-smoke-001 --output-root runs
+```
+
+Expected:
+- `runs/pr2-smoke-001/run.json` `status` is `completed`.
+- `runs/pr2-smoke-001/logical/repair_history.json` (if any rounds exist) every entry has a `produced_files` array.
+- `runs/pr2-smoke-001/physical/mutations/snapshots/attempt_1.json` exists for the first successful build mutation.
+- LangSmith trace (if re-enabled) shows `inspect_graph` calls with `view="diff"` during repair rounds.
+
+- [ ] **Step 3: Branch / PR**
+
+Open PR titled `feat: PR2 ledger product-pointers and mutation incrementality`. Reference spec modules E + F.
+
+PR2 chunk done.
+
+---
+
+(Chunks 3 / 4 will be appended in subsequent revisions of this plan after Chunk 2 reviewer approves.)
