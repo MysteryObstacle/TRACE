@@ -64,14 +64,18 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
     graph = result["draft_artifact"]["graph"]
 
     assert client.calls[0]["role_name"] == "logical_repair"
-    assert client.calls[0]["tool_names"] == [
+    tool_names = set(client.calls[0]["tool_names"])
+    assert {
         "inspect_graph",
         "read_support_file",
         "write_checkpoint_file",
         "write_mutation_file",
         "execute_mutation_file",
         "validate_graph",
-    ]
+        "list_support_files",
+    }.issubset(tool_names)
+    assert "find_images" not in tool_names
+    assert "get_image" not in tool_names
     assert graph["links"][0]["id"] == "R1-R2-1"
     assert graph["nodes"][0]["ports"][0]["id"] == "_R2-1"
     assert result["messages"] == [{"role": "assistant", "content": "repair complete"}]

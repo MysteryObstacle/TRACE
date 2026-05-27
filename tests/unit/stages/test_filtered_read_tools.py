@@ -68,3 +68,19 @@ def test_physical_author_read_constraint_file_supports_filter():
     out = bound["read_constraint_file"].invoke({"path": "ground/physical_constraints.json", "match": "pc2"})
     assert "pc2" in out["content"]
     assert 'pc1"' not in out["content"]
+
+
+def test_list_support_files_returns_sorted_paths():
+    tools = StageRepairTools(
+        _seed_artifact(),
+        support_files={"logical/checkpoints.py": "", "ground/logical_constraints.json": "{}"},
+    )
+    assert tools.list_support_files() == {"paths": ["ground/logical_constraints.json", "logical/checkpoints.py"]}
+
+
+def test_list_support_files_exposed_as_agent_tool():
+    tools = StageRepairTools(_seed_artifact(), support_files={"logical/checkpoints.py": ""})
+    bound = {tool.name: tool for tool in tools.as_agent_tools()}
+    assert "list_support_files" in bound
+    result = bound["list_support_files"].invoke({})
+    assert "paths" in result

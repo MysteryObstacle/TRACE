@@ -170,12 +170,19 @@ class StageRepairTools:
 
             return self.validate_graph()
 
+        @tool("list_support_files")
+        def list_support_files_tool() -> dict[str, Any]:
+            """List all support file paths currently accessible to the agent."""
+
+            return self.list_support_files()
+
         tools = [
             inspect_graph_tool,
             read_support_file_tool,
             write_mutation_file_tool,
             execute_mutation_file_tool,
             validate_graph_tool,
+            list_support_files_tool,
         ]
         if include_checkpoint_tool:
             tools.insert(2, write_checkpoint_file_tool)
@@ -197,6 +204,9 @@ class StageRepairTools:
             return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
         content = filtered_view(self._support_files[normalized], match=match, keys=keys, head_lines=head_lines)
         return {"ok": True, "path": normalized, "content": content}
+
+    def list_support_files(self) -> dict[str, Any]:
+        return {"paths": sorted(self._support_files.keys())}
 
     def write_checkpoint_file(self, *, path: str, content: str) -> dict[str, Any]:
         normalized = _safe_relative_path(path)
