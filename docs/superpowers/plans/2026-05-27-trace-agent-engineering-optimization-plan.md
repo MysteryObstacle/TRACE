@@ -104,7 +104,27 @@ Tests (modify):
 
 ### Chunk 3 — PR3 LangGraph native convergence
 
-(Detailed task list will be appended after Chunk 2 reviewer approves.)
+Source files (logic change):
+
+- `src/trace/runtime/engine.py` — `RunState.events` becomes `Annotated[list[dict], operator.add]`; new field `escalation_history: Annotated[list[dict], operator.add]` (default `[]`); `_merge_stage_result` and `_merge_stage_exception` return partial updates instead of calling `merge_run_state` for list fields; `_finalize` returns partial.
+- `src/trace/runtime/reducers.py` — `merge_run_state` drops the manual `events` list concat (now handled by reducer); keep `_merge_dict` for non-reducer dict fields.
+- `src/trace/runtime/role_client.py` — `_chat_openai_cache` keyed by `(role_name, model, temperature, base_url)`; rename `max_tool_calls` → `max_react_steps` everywhere in this module (with backwards-compatible alias for one PR); compute `max_steps` from `max_react_steps` and pass to `create_react_agent` (or via custom `should_continue` if `max_steps` isn't supported in the pinned langgraph version — Chunk plan documents both branches).
+- `src/trace/stages/ground/state.py`, `logical/state.py`, `physical/state.py` — `events`, `repair_history`, `retry_history` annotated with `operator.add`; remove `next_action` field.
+- `src/trace/stages/ground/nodes/evaluator.py`, `logical/nodes/validator.py`, `physical/nodes/validator.py` — return `Command(goto=..., update={...})` rather than mutating `state["next_action"]`.
+- `src/trace/stages/ground/__init__.py`, `logical/__init__.py`, `physical/__init__.py` — drop `add_conditional_edges("validator", lambda state: state["next_action"], ...)`.
+- All stage node files — replace `state["events"] = [*state.get("events", []), ...]`, `state["repair_history"] = [*prior_ledger, entry]`, `state["retry_history"] = [...]` with partial-update returns. (Detailed file list in tasks below.)
+
+Tests (add):
+
+- `tests/unit/runtime/test_reducers.py` — RunState events reducer accumulates across nodes.
+- `tests/unit/runtime/test_role_client_cache.py` — `ChatOpenAI` instance reused across calls with same role tuple.
+- `tests/unit/stages/test_validator_command.py` — validator nodes return `Command` with correct `goto`.
+- `tests/unit/stages/test_evaluator_command.py` — ground evaluator returns `Command`.
+
+Tests (modify):
+
+- All stage validator tests — assert on `Command.goto` rather than `state["next_action"]`.
+- Stage integration tests — events list accumulates via reducer (no explicit `[*...]` patterns needed in nodes).
 
 ### Chunk 4 — PR4 SqliteSaver checkpointer and escalation
 
@@ -2741,4 +2761,748 @@ PR2 chunk done.
 
 ---
 
-(Chunks 3 / 4 will be appended in subsequent revisions of this plan after Chunk 2 reviewer approves.)
+## Chunk 3: PR3 — LangGraph Native Convergence (Reducers, Command Routing, ChatOpenAI Cache)
+
+This chunk swaps hand-rolled state plumbing for LangGraph 1.x native idioms. After PR3 merges, all list fields accumulate via reducer; validator/evaluator nodes return `Command(...)`; `ChatOpenAI` instances are cached.
+
+**Branch / commit cadence:** ~10 commits. This chunk is more invasive than PR1/PR2; run the full suite after each task.
+
+### Task 3.1: Annotate `RunState` list fields with reducers
+
+**Files:**
+- Modify: `src/trace/runtime/engine.py` (`RunState`)
+- Modify: `src/trace/runtime/reducers.py` (`merge_run_state` no longer concats events)
+- Create test: `tests/unit/runtime/test_reducers.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# tests/unit/runtime/test_reducers.py
+from langgraph.graph import END, StateGraph
+from trace.runtime.engine import RunState
+
+
+def test_run_state_events_accumulate_via_reducer():
+    graph = StateGraph(RunState)
+    graph.add_node("node_a", lambda state: {"events": [{"type": "a"}]})
+    graph.add_node("node_b", lambda state: {"events": [{"type": "b"}]})
+    graph.set_entry_point("node_a")
+    graph.add_edge("node_a", "node_b")
+    graph.add_edge("node_b", END)
+    compiled = graph.compile()
+    result = compiled.invoke({"run_id": "test", "intent": "x", "status": "running"})
+    types = [event["type"] for event in result.get("events", [])]
+    assert types == ["a", "b"]
+
+
+def test_escalation_history_accumulates_via_reducer():
+    graph = StateGraph(RunState)
+    graph.add_node("node_a", lambda state: {"escalation_history": [{"round": 1}]})
+    graph.add_node("node_b", lambda state: {"escalation_history": [{"round": 2}]})
+    graph.set_entry_point("node_a")
+    graph.add_edge("node_a", "node_b")
+    graph.add_edge("node_b", END)
+    compiled = graph.compile()
+    result = compiled.invoke({"run_id": "t", "intent": "x", "status": "running"})
+    rounds = [item["round"] for item in result.get("escalation_history", [])]
+    assert rounds == [1, 2]
+```
+
+- [ ] **Step 2: Run test to verify fail**
+
+Run: `pytest tests/unit/runtime/test_reducers.py -v`
+Expected: FAIL — `events` currently overwrites instead of accumulating; `escalation_history` field doesn't exist.
+
+- [ ] **Step 3: Annotate `RunState` fields**
+
+In `src/trace/runtime/engine.py`:
+
+```python
+import operator
+from typing import Annotated, Any, TypedDict
+
+
+class RunState(TypedDict, total=False):
+    run_id: str
+    intent: str
+    status: str
+    current_stage: str | None
+    artifacts: dict[str, dict[str, Any]]
+    stage_reports: dict[str, dict[str, Any]]
+    attempt_counters: dict[str, int]
+    support_files: dict[str, str]
+    events: Annotated[list[dict[str, Any]], operator.add]
+    escalation_history: Annotated[list[dict[str, Any]], operator.add]
+    error: dict[str, Any] | None
+    config_snapshot: dict[str, Any]
+    resume: dict[str, Any]
+```
+
+- [ ] **Step 4: Drop events concat from `merge_run_state`**
+
+In `src/trace/runtime/reducers.py`:
+
+```python
+def merge_run_state(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(current)
+
+    for field in ("status", "current_stage", "error", "config_snapshot", "run_id", "intent"):
+        if field in update:
+            merged[field] = deepcopy(update[field])
+
+    merged["artifacts"] = _merge_dict(merged.get("artifacts", {}), update.get("artifacts", {}))
+    merged["attempt_counters"] = _merge_dict(merged.get("attempt_counters", {}), update.get("attempt_counters", {}))
+    merged["stage_reports"] = _merge_dict(merged.get("stage_reports", {}), update.get("stage_reports", {}))
+    merged["support_files"] = _merge_dict(merged.get("support_files", {}), update.get("support_files", {}))
+    # NOTE: events and escalation_history are reducer-managed (Annotated[list, operator.add]);
+    # callers should return partial updates and let LangGraph accumulate.
+    return merged
+```
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/runtime/test_reducers.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/runtime/engine.py src/trace/runtime/reducers.py tests/unit/runtime/test_reducers.py
+git commit -m "feat(runtime): annotate RunState list fields with reducers"
+```
+
+### Task 3.2: Annotate stage TypedDict list fields with reducers; remove `next_action`
+
+**Files:**
+- Modify: `src/trace/stages/ground/state.py`
+- Modify: `src/trace/stages/logical/state.py`
+- Modify: `src/trace/stages/physical/state.py`
+- Test: `tests/unit/runtime/test_reducers.py` (extend)
+
+- [ ] **Step 1: Extend test for stage states**
+
+Append to `tests/unit/runtime/test_reducers.py`:
+
+```python
+def test_logical_state_repair_history_accumulates():
+    from langgraph.graph import END, StateGraph
+    from trace.stages.logical.state import LogicalState
+
+    graph = StateGraph(LogicalState)
+    graph.add_node("a", lambda state: {"repair_history": [{"round": 1}]})
+    graph.add_node("b", lambda state: {"repair_history": [{"round": 2}]})
+    graph.set_entry_point("a")
+    graph.add_edge("a", "b")
+    graph.add_edge("b", END)
+    compiled = graph.compile()
+    result = compiled.invoke({})
+    rounds = [item["round"] for item in result.get("repair_history", [])]
+    assert rounds == [1, 2]
+
+
+def test_ground_state_does_not_define_next_action():
+    from trace.stages.ground.state import GroundState
+    assert "next_action" not in GroundState.__optional_keys__
+
+
+def test_logical_state_does_not_define_next_action():
+    from trace.stages.logical.state import LogicalState
+    assert "next_action" not in LogicalState.__optional_keys__
+
+
+def test_physical_state_does_not_define_next_action():
+    from trace.stages.physical.state import PhysicalState
+    assert "next_action" not in PhysicalState.__optional_keys__
+```
+
+- [ ] **Step 2: Run to verify fail**
+
+Run: `pytest tests/unit/runtime/test_reducers.py -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Update three stage state files**
+
+In `src/trace/stages/logical/state.py`:
+
+```python
+from __future__ import annotations
+
+import operator
+from typing import Annotated, Any, TypedDict
+
+
+class LogicalState(TypedDict, total=False):
+    ground_artifact: dict[str, Any]
+    attempt: int
+    max_attempts: int
+    author_output: dict[str, Any]
+    draft_artifact: dict[str, Any]
+    logical_artifact: dict[str, Any]
+    evaluation_report: dict[str, Any]
+    repair_history: Annotated[list[dict[str, Any]], operator.add]
+    messages: list[dict[str, str]]
+    events: Annotated[list[dict[str, Any]], operator.add]
+    support_files: dict[str, str]
+    support_file_root: str
+    result: dict[str, Any]
+    error: dict[str, Any] | None
+```
+
+(Drop `next_action`.)
+
+In `src/trace/stages/physical/state.py`: same shape for `PhysicalState` — `repair_history` and `events` annotated, `next_action` dropped.
+
+In `src/trace/stages/ground/state.py`:
+
+```python
+class GroundState(TypedDict, total=False):
+    intent: str
+    grounding_checks: dict[str, Any]
+    attempt: int
+    max_attempts: int
+    status: str
+    draft_artifact: dict[str, Any]
+    evaluation_report: dict[str, Any]
+    messages: list[dict[str, str]]
+    retry_history: Annotated[list[dict[str, Any]], operator.add]
+    events: Annotated[list[dict[str, Any]], operator.add]
+    support_files: dict[str, str]
+    support_file_root: str
+    result: dict[str, Any]
+    error: dict[str, Any] | None
+```
+
+(Drop `next_action`.)
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/runtime/test_reducers.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/ground/state.py src/trace/stages/logical/state.py src/trace/stages/physical/state.py tests/unit/runtime/test_reducers.py
+git commit -m "refactor(state): annotate stage list fields; remove next_action"
+```
+
+### Task 3.3: Refactor `_merge_stage_result` / `_merge_stage_exception` to return partial updates
+
+**Files:**
+- Modify: `src/trace/runtime/engine.py`
+- Modify existing tests under `tests/integration/test_runtime_pipeline.py` if they assert on the merge-side behavior
+
+- [ ] **Step 1: Update `_merge_stage_result`**
+
+Change the function signature: it should now return a partial state dict that LangGraph will merge via reducers. Keep storage side effects.
+
+```python
+def _merge_stage_result(self, state: RunState, stage_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    partial: dict[str, Any] = {
+        "current_stage": stage_id,
+        "artifacts": {**state.get("artifacts", {}), stage_id: result["artifact"]},
+        "stage_reports": {
+            **state.get("stage_reports", {}),
+            stage_id: {
+                "stage_id": stage_id,
+                "attempts_used": result["attempts_used"],
+                "evaluation_summary": result["evaluation_summary"],
+            },
+        },
+        "attempt_counters": {**state.get("attempt_counters", {}), stage_id: result["attempts_used"]},
+        "support_files": {**state.get("support_files", {}), **result.get("support_files", {})},
+        # NOTE: events are reducer-accumulated; return only the new ones.
+        "events": result["events"],
+    }
+    self.storage.write_run_state(run_id=state["run_id"], run_payload={**state, **partial})
+    self.storage.write_stage_snapshot(
+        run_id=state["run_id"],
+        stage_id=stage_id,
+        artifact=result["artifact"],
+        evaluation=result["evaluation_summary"] or {"ok": True, "issues": []},
+        summary={"attempts_used": result["attempts_used"]},
+        messages=result["messages"],
+        tool_journal=result["tool_journal"],
+        history_name=_stage_history_name(stage_id),
+        history_entries=result[_stage_history_name(stage_id)],
+        events=result["events"],
+        support_files=result.get("support_files", {}),
+    )
+    return partial
+
+
+def _merge_stage_exception(self, state: RunState, stage_id: str, exc: Exception) -> dict[str, Any]:
+    error = {"stage_id": stage_id, "type": type(exc).__name__, "message": str(exc)}
+    partial = {
+        "status": "failed",
+        "current_stage": stage_id,
+        "error": error,
+        "events": [{"type": "run.stage_failed", "stage_id": stage_id, "error": error}],
+    }
+    merged = {**state, **partial}
+    self.storage.write_run_state(run_id=merged["run_id"], run_payload=merged)
+    self.storage.write_stage_snapshot(
+        run_id=merged["run_id"],
+        stage_id=stage_id,
+        artifact=merged.get("artifacts", {}).get(stage_id, {}),
+        evaluation={"ok": False, "issues": []},
+        summary={"attempts_used": 0, "error": error},
+        messages=[],
+        tool_journal=[],
+        history_name=_stage_history_name(stage_id),
+        history_entries=[],
+        events=partial["events"],
+        support_files={},
+    )
+    return partial
+
+
+def _finalize(self, state: RunState) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "current_stage": None,
+        "events": [{"type": "run.completed"}],
+    }
+```
+
+- [ ] **Step 2: Run integration suite**
+
+Run: `pytest tests/integration -v`
+Expected: PASS (any failures here mean a test asserted on the now-deprecated merge behavior; update accordingly to assert on final state shape only).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/trace/runtime/engine.py tests/integration
+git commit -m "refactor(engine): return partial stage updates and rely on RunState reducers"
+```
+
+### Task 3.4: Refactor all stage nodes to return partial updates (logical stage)
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/author.py`, `builder.py`, `prepare.py`, `repair.py`, `finalize.py`
+- Modify existing logical stage unit tests (if any assert specific `state["events"]` overwrite semantics)
+
+- [ ] **Step 1: Inventory event-append patterns in logical nodes**
+
+Run: `rg -n "state\[\"events\"\] = \[\*state.get|state\[\"repair_history\"\] = \[\*" src/trace/stages/logical/nodes`
+Capture every match.
+
+- [ ] **Step 2: Refactor each logical node to return partial**
+
+For each `node(state)` function:
+
+a. Stop assigning to `state[key]` for reducer-managed fields (`events`, `repair_history`).
+b. Build a partial dict and return it. LangGraph merges it via the state schema (reducers for annotated fields, default replace for others).
+
+Example (`logical/nodes/repair.py`):
+
+```python
+def repair_node(state: LogicalState, role_client) -> dict[str, Any]:
+    prior_ledger = list(state.get("repair_history", []))
+    repair_tools = StageRepairTools(
+        state["draft_artifact"],
+        support_files=state.get("support_files", {}),
+        support_file_root=state.get("support_file_root"),
+        mutation_index_seed=len(prior_ledger) + 1,
+    )
+    messages = _build_repair_messages(...)
+    agent_result = role_client.invoke_agent(
+        role_name="logical_repair",
+        messages=messages,
+        tools=repair_tools.as_agent_tools(),
+        max_react_steps=MAX_REACT_STEPS,
+    )
+    post_repair_report = repair_tools.validate_graph()
+    ledger_entry = _build_repair_ledger_entry(
+        round_index=len(prior_ledger) + 1,
+        issues_before=state["evaluation_report"],
+        issues_after=post_repair_report,
+        attempted_actions=_extract_tool_attempts(agent_result),
+    )
+    return {
+        "draft_artifact": repair_tools.artifact_state(),
+        "support_files": repair_tools.support_files(),
+        "messages": _extract_messages(agent_result),
+        "attempt": state.get("attempt", 0) + 1,
+        # reducer-appended; do NOT concat with prior:
+        "repair_history": [ledger_entry],
+        "events": [{"type": "logical.repair.completed", "attempt": state.get("attempt", 0) + 1}],
+    }
+```
+
+(Note: `mutation_index_seed` is now `len(prior_ledger) + 1` to match Chunk 2.6.)
+
+Apply the same partial-return pattern to:
+- `prepare_node` — was returning full state mutation; now return only the new keys.
+- `author_node` — return only `{"author_output", "messages", "events": [...]}` etc.
+- `builder_node` — return only `{"draft_artifact", "support_files", "messages", "events": [...]}`.
+- `finalize_node` — return only `{"result", "events": [...]}` or similar.
+
+- [ ] **Step 3: Run logical stage tests**
+
+Run: `pytest tests/unit/stages/logical tests/unit/stages/test_filtered_read_tools.py tests/unit/stages/test_repair_tools_summary.py -v`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/trace/stages/logical/nodes
+git commit -m "refactor(logical): nodes return partial updates; reducer-managed lists"
+```
+
+### Task 3.5: Refactor physical stage nodes to return partial updates
+
+**Files:**
+- Modify: `src/trace/stages/physical/nodes/author.py`, `builder.py`, `prepare.py`, `repair.py`, `finalize.py`
+
+- [ ] **Step 1: Mirror the logical-stage refactor**
+
+Same pattern as Task 3.4 for physical nodes. Pay attention to two physical-only details:
+
+- `physical/nodes/repair.py` already received the `image_catalog` cleanup (Chunk 1 Task 1.9). Re-confirm imports are tidy.
+- `physical/nodes/validator.py` is converted to `Command` in Task 3.7; leave it alone in this task.
+
+- [ ] **Step 2: Run physical stage tests**
+
+Run: `pytest tests/unit/stages/physical -v`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/trace/stages/physical/nodes
+git commit -m "refactor(physical): nodes return partial updates"
+```
+
+### Task 3.6: Refactor ground stage nodes to return partial updates
+
+**Files:**
+- Modify: `src/trace/stages/ground/nodes/*.py` (excluding `evaluator.py` which is handled in Task 3.7)
+
+- [ ] **Step 1: Apply same pattern**
+
+For each ground node `node(state)`, change `state[...] = ...` assignments for reducer-managed fields to partial-dict return. `retry_history` and `events` are reducer-managed; `messages` is not (overwrite is intended).
+
+- [ ] **Step 2: Run ground stage tests**
+
+Run: `pytest tests/unit/stages -k ground -v`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/trace/stages/ground/nodes
+git commit -m "refactor(ground): nodes return partial updates"
+```
+
+### Task 3.7: Convert validator and evaluator to `Command`-based routing
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/validator.py`
+- Modify: `src/trace/stages/physical/nodes/validator.py`
+- Modify: `src/trace/stages/ground/nodes/evaluator.py`
+- Modify: `src/trace/stages/logical/__init__.py`, `physical/__init__.py`, `ground/__init__.py` (drop `add_conditional_edges` for these branches; LangGraph reads routing from the returned `Command`)
+- Create test: `tests/unit/stages/test_validator_command.py`
+- Create test: `tests/unit/stages/test_evaluator_command.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_validator_command.py
+from langgraph.types import Command
+from trace.stages.logical.nodes.validator import validator_node as logical_validator
+from trace.stages.physical.nodes.validator import validator_node as physical_validator
+
+
+def test_logical_validator_returns_command_finalize_when_ok(monkeypatch):
+    monkeypatch.setattr(
+        "trace.stages.logical.nodes.validator._validate_logical_artifact",
+        lambda *_args, **_kwargs: {"ok": True, "issues": []},
+    )
+    state = {"draft_artifact": {"graph": {}}, "attempt": 1, "max_attempts": 3}
+    result = logical_validator(state)
+    assert isinstance(result, Command)
+    assert result.goto == "finalize"
+    assert result.update.get("evaluation_report") == {"ok": True, "issues": []}
+
+
+def test_logical_validator_returns_command_repair_when_not_ok(monkeypatch):
+    monkeypatch.setattr(
+        "trace.stages.logical.nodes.validator._validate_logical_artifact",
+        lambda *_args, **_kwargs: {"ok": False, "issues": [{"details": {"issue_kind": "missing_link"}}]},
+    )
+    state = {"draft_artifact": {"graph": {}}, "attempt": 1, "max_attempts": 3}
+    result = logical_validator(state)
+    assert result.goto == "repair"
+
+
+def test_logical_validator_returns_command_failed_when_attempts_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        "trace.stages.logical.nodes.validator._validate_logical_artifact",
+        lambda *_args, **_kwargs: {"ok": False, "issues": [{"details": {"issue_kind": "missing_link"}}]},
+    )
+    state = {"draft_artifact": {"graph": {}}, "attempt": 3, "max_attempts": 3}
+    result = logical_validator(state)
+    from langgraph.graph import END
+    assert result.goto == END
+    assert result.update.get("error") is not None
+```
+
+(Add similar tests for physical_validator and ground evaluator.)
+
+- [ ] **Step 2: Run tests to verify fail**
+
+Run: `pytest tests/unit/stages/test_validator_command.py -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Convert validator/evaluator nodes**
+
+In `src/trace/stages/logical/nodes/validator.py`:
+
+```python
+from langgraph.graph import END
+from langgraph.types import Command
+
+
+def validator_node(state: LogicalState) -> Command:
+    report = _validate_logical_artifact(...)
+    if report["ok"]:
+        return Command(goto="finalize", update={"evaluation_report": report})
+    if state["attempt"] >= state["max_attempts"]:
+        return Command(
+            goto=END,
+            update={
+                "evaluation_report": report,
+                "error": {"message": "logical stage exceeded max attempts", "issues": report["issues"]},
+            },
+        )
+    return Command(goto="repair", update={"evaluation_report": report})
+```
+
+Same shape for `physical/nodes/validator.py` and `ground/nodes/evaluator.py`.
+
+- [ ] **Step 4: Drop `add_conditional_edges` for these branches in stage `__init__.py`**
+
+In `src/trace/stages/logical/__init__.py`:
+
+```python
+def _build_logical_graph(*, role_client, settings):
+    del settings
+    graph = StateGraph(LogicalState)
+    graph.add_node("prepare", prepare_node)
+    graph.add_node("author", lambda state: author_node(state, role_client))
+    graph.add_node("builder", lambda state: builder_node(state, role_client))
+    graph.add_node("validator", validator_node)
+    graph.add_node("repair", lambda state: repair_node(state, role_client))
+    graph.add_node("finalize", finalize_node)
+    graph.set_entry_point("prepare")
+    graph.add_edge("prepare", "author")
+    graph.add_edge("author", "builder")
+    graph.add_edge("builder", "validator")
+    # validator returns Command(goto=...); LangGraph reads it directly.
+    graph.add_edge("repair", "validator")
+    graph.add_edge("finalize", END)
+    return graph.compile()
+```
+
+Same drop for physical and ground.
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages -v`
+Expected: PASS. If any old test still asserts `state["next_action"]`, update to assert on `Command.goto` or on final state.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages tests/unit/stages
+git commit -m "feat(stages): validator and evaluator return Command for routing"
+```
+
+### Task 3.8: Cache `ChatOpenAI` instances in `LangChainRoleClient`
+
+**Files:**
+- Modify: `src/trace/runtime/role_client.py`
+- Create test: `tests/unit/runtime/test_role_client_cache.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# tests/unit/runtime/test_role_client_cache.py
+from unittest.mock import patch
+from trace.config.settings import RoleSettings, TraceSettings, LangSmithSettings
+from trace.runtime.role_client import LangChainRoleClient
+
+
+def _stub_settings():
+    return TraceSettings(
+        openai_api_key="sk-test",
+        openai_base_url="https://example/v1",
+        langsmith=LangSmithSettings(),
+        roles={
+            "logical_repair": RoleSettings(model="gpt-4o-mini", temperature=0.0, max_attempts=3),
+        },
+    )
+
+
+def test_chat_openai_cached_for_same_role_signature():
+    settings = _stub_settings()
+    client = LangChainRoleClient(settings)
+    with patch("trace.runtime.role_client.ChatOpenAI") as ChatOpenAIMock:
+        ChatOpenAIMock.return_value = object()
+        client._chat_openai(role_name="logical_repair")
+        client._chat_openai(role_name="logical_repair")
+        assert ChatOpenAIMock.call_count == 1
+
+
+def test_chat_openai_distinct_role_creates_separate_instance():
+    settings = _stub_settings()
+    settings.roles["logical_author"] = RoleSettings(model="gpt-4o", temperature=0.2, max_attempts=3)
+    client = LangChainRoleClient(settings)
+    with patch("trace.runtime.role_client.ChatOpenAI") as ChatOpenAIMock:
+        ChatOpenAIMock.return_value = object()
+        client._chat_openai(role_name="logical_repair")
+        client._chat_openai(role_name="logical_author")
+        assert ChatOpenAIMock.call_count == 2
+```
+
+- [ ] **Step 2: Run test to verify fail**
+
+Run: `pytest tests/unit/runtime/test_role_client_cache.py -v`
+Expected: FAIL — `_chat_openai` doesn't exist and ChatOpenAI is re-instantiated on every call.
+
+- [ ] **Step 3: Implement cache helper**
+
+In `src/trace/runtime/role_client.py`:
+
+```python
+class LangChainRoleClient:
+    def __init__(self, settings: TraceSettings, observer: TraceObserver | None = None) -> None:
+        self.settings = settings
+        self.observer = observer or TraceObserver(settings.langsmith)
+        self._chat_openai_cache: dict[tuple[str, str, float, str], ChatOpenAI] = {}
+
+    def _chat_openai(self, *, role_name: str) -> ChatOpenAI:
+        role_settings = self.settings.roles[role_name]
+        cache_key = (role_name, role_settings.model, role_settings.temperature, self.settings.openai_base_url or "")
+        cached = self._chat_openai_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        model = ChatOpenAI(
+            model=role_settings.model,
+            temperature=role_settings.temperature,
+            api_key=self.settings.openai_api_key,
+            base_url=self.settings.openai_base_url,
+        )
+        self._chat_openai_cache[cache_key] = model
+        return model
+```
+
+Replace every `ChatOpenAI(...)` instantiation in `invoke_structured`, `invoke_agent`, `invoke` with `self._chat_openai(role_name=role_name)`.
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/runtime/test_role_client_cache.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/runtime/role_client.py tests/unit/runtime/test_role_client_cache.py
+git commit -m "feat(role_client): cache ChatOpenAI instances by role signature"
+```
+
+### Task 3.9: Rename `max_tool_calls` → `max_react_steps` with semantic clarification
+
+**Files:**
+- Modify: `src/trace/runtime/role_client.py`
+- Modify: `src/trace/stages/logical/nodes/author.py`, `builder.py`, `repair.py` (call sites + `MAX_TOOL_CALLS` constant rename)
+- Modify: `src/trace/stages/physical/nodes/author.py`, `builder.py`, `repair.py` (same)
+- Modify: all test files invoking `invoke_agent(..., max_tool_calls=...)`
+
+- [ ] **Step 1: Inventory call sites**
+
+Run: `rg -n "max_tool_calls|MAX_TOOL_CALLS" src/trace tests`
+Capture every match.
+
+- [ ] **Step 2: Rename in `role_client.py`**
+
+```python
+def invoke_agent(
+    self,
+    *,
+    role_name: str,
+    messages: list[dict[str, str]],
+    tools: list[Any],
+    max_react_steps: int = 24,
+    max_tool_calls: int | None = None,  # backwards-compatible alias for one PR
+) -> Any:
+    if max_tool_calls is not None:
+        # Deprecated alias kept temporarily; treat as max_react_steps.
+        max_react_steps = max_tool_calls
+    role_settings = self.settings.roles[role_name]
+    with self.observer.role_run(role_name, message_count=len(messages), tool_count=len(tools)):
+        model = self._chat_openai(role_name=role_name)
+        agent = create_react_agent(model, tools, prompt=None)
+        lc_messages = [_to_message(item) for item in messages]
+        # recursion_limit maps to LangGraph steps; each react cycle costs 2 (model + tool).
+        return agent.invoke({"messages": lc_messages}, {"recursion_limit": max_react_steps * 2})
+```
+
+(If the pinned langgraph version exposes `max_steps` on `create_react_agent`, prefer that — the body becomes `agent = create_react_agent(model, tools, prompt=None, max_steps=max_react_steps)`. Check the installed version with `pip show langgraph | findstr Version`; document the chosen branch in code comment.)
+
+- [ ] **Step 3: Rename `MAX_TOOL_CALLS` constants to `MAX_REACT_STEPS` (and adjust default values if appropriate)**
+
+In each of the 6 node files:
+
+```python
+MAX_REACT_STEPS = 12
+```
+
+Update each `invoke_agent(role_name=..., messages=..., tools=..., max_tool_calls=MAX_TOOL_CALLS)` to `invoke_agent(role_name=..., messages=..., tools=..., max_react_steps=MAX_REACT_STEPS)`.
+
+- [ ] **Step 4: Update existing tests that pass `max_tool_calls=12` in `FakeRoleClient.invoke_agent` signatures**
+
+For each `class FakeRoleClient` definition in `tests/unit/stages/**`, change `max_tool_calls=12` parameter to `max_react_steps=12` (keep `max_tool_calls` as a backwards-compat alias only in production code, not in tests).
+
+- [ ] **Step 5: Run tests**
+
+Run: `pytest tests/unit -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace tests/unit
+git commit -m "refactor(role_client): rename max_tool_calls to max_react_steps with clarified semantics"
+```
+
+### Task 3.10: Verify full test suite and demo smoke
+
+- [ ] **Step 1: Full unit + integration suite**
+
+Run: `pytest -q`
+Expected: all green.
+
+- [ ] **Step 2: Demo smoke**
+
+```powershell
+$env:LANGSMITH_TRACING="false"
+trace run tests/demo/demo.md --run-id pr3-smoke-001 --output-root runs
+```
+
+Expected:
+- Run completes.
+- `runs/pr3-smoke-001/events.jsonl` contains the full event stream (reducer-accumulated correctly).
+- `repair_history` events appended in order across rounds without duplicates.
+
+- [ ] **Step 3: Branch / PR**
+
+Open PR titled `feat: PR3 LangGraph native convergence (reducers, Command, ChatOpenAI cache)`. Reference spec module C1+C2.
+
+PR3 chunk done.
+
+---
+
+(Chunk 4 will be appended in subsequent revisions of this plan after Chunk 3 reviewer approves.)
