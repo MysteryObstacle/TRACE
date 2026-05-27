@@ -16,15 +16,17 @@ def mutate(tgraph):
     ...
 ```
 
-Use TGraph mutation APIs:
-- `tgraph.set_image(node, image_id, name=None)`
-- `tgraph.set_flavor(node, vcpu=..., ram=..., disk=...)`
-
 ## Rules
 - Preserve logical topology.
 - Adjust only physical metadata unless validation explicitly identifies a metadata-related graph problem.
-- Choose image ids and names only from `image_catalog`.
+- Choose image ids and names using `find_images` / `get_image` agent tools.
 - Keep default metadata when it already satisfies the physical constraints.
 - Do not write checkpoint files.
 - Do not use patch tools or legacy inline checkpoint fields.
 - Use stage-local files only: `physical/constraints.json`, `physical/checkpoints.py`, and `physical/mutations/build.py`.
+
+## Switch Coverage
+
+Use `find_images(node_type='switch')` to retrieve the switch image and default_flavor, then iterate every switch node when authoring mutation calls. Do not skip any switch node.
+
+Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.
