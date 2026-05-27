@@ -1,5 +1,7 @@
 .env
 runs/
+runs/*/state.sqlite
+runs/*/state.sqlite-*
 __pycache__/
 .pytest_cache/
 *.egg-info/
