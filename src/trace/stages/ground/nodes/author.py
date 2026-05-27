@@ -61,11 +61,9 @@ def author_node(state: GroundState, role_client) -> GroundState:
         schema=GroundDraftArtifact,
     )
 
-    state["messages"] = messages
-    state["draft_artifact"] = artifact
-    state["status"] = "evaluating"
-    state["events"] = [
-        *state.get("events", []),
-        {"type": "ground.author.completed", "revision": revising},
-    ]
-    return state
+    return {
+        "messages": messages,
+        "draft_artifact": artifact,
+        "status": "evaluating",
+        "events": [{"type": "ground.author.completed", "revision": revising}],
+    }
