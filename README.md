@@ -32,7 +32,7 @@ TRACE 是一个面向网络拓扑意图建模的核心运行时重写版。当�
 
 - `translate` 阶段
 - 跨 run 长期记忆
-- LangGraph native checkpointer 持久化；当前先使用 TRACE stage artifact checkpoint/resume
+- LangGraph SqliteSaver checkpointer（`runs/<run_id>/state.sqlite`）与 RunStorage 双轨 resume
 - 前端可视化
 - 旧项目 `experiments/` 迁移
 
@@ -164,6 +164,23 @@ trace resume demo-001 --from physical --in-place --output-root runs
 ```
 
 恢复到新 run 时，被复用 stage 的 snapshot 目录也会复制过去，方便在一个 run 目录里查看完整链路。
+
+### 状态持久化与恢复策略
+
+每次 `trace run` 会在 `runs/<run_id>/state.sqlite` 落地一份 LangGraph 状态 (Checkpointer)；
+`runs/<run_id>/run.json` 与 `<stage>/` 子目录仍作为人类可读快照保留。
+
+恢复时：
+
+- `--in-place` 模式下，如果 sqlite 存在则从最近的 stage checkpoint 继续（包括中间未完成的 attempt）；
+- `--new-run-id <id>` 模式（默认）下，始终走 `RunStorage` 路径：把上一 run 的 stage 快照拷贝进新 `runs/<new_id>/` 目录后重新跑，并在新目录里建立自己的 sqlite。
+
+### Escalation 反馈通道
+
+logical / physical stage 在遇到 `*.escalation.*` 类 issue 时不会进入 repair，而是把
+`escalation_report` 回流给 ground，由 ground 重新评估 constraints。计数器
+`attempt_counters.escalation` 上限为 2 次；超出则整体失败。
+若 ground 判断 `unsolvable=true`，run 直接以 `status="unsolvable"` 终止并提示用户检查 intent。
 
 ## 输出目录
 
