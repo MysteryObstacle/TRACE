@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 
@@ -76,21 +75,15 @@ def _run_checkpoint_files(graph: TGraph, context: ValidationContext) -> list[Val
 
         executions.append((constraint_result.constraints, checkpoint_path))
 
-    max_workers = max(1, int(context.checkpoint_max_processes))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(
-                execute_checkpoint_file,
-                graph,
-                constraints=constraints,
-                checkpoint_path=checkpoint_path,
-                references=context.references,
-                timeout_seconds=context.checkpoint_timeout_seconds,
-            )
-            for constraints, checkpoint_path in executions
-        ]
-        for future in futures:
-            issues.extend(future.result().issues)
+    for constraints, checkpoint_path in executions:
+        result = execute_checkpoint_file(
+            graph,
+            constraints=constraints,
+            checkpoint_path=checkpoint_path,
+            references=context.references,
+            timeout_seconds=context.checkpoint_timeout_seconds,
+        )
+        issues.extend(result.issues)
     return issues
 
 

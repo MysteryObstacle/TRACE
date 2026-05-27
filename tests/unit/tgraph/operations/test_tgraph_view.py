@@ -41,6 +41,31 @@ def test_view_links_filter_by_node_pair_and_link_key() -> None:
     assert [link["id"] for link in view.links(node_id="A", port_id="_B-2")] == ["A-B-backup"]
 
 
+def test_view_escalate_helper_returns_whitelisted_issue() -> None:
+    view = TGraphView(_node_local_graph())
+
+    issues = view.escalate(
+        "logical.escalation.no_satisfying_topology",
+        "no topology satisfies lc3 and lc7",
+        targets=["R1"],
+    )
+
+    assert len(issues) == 1
+    assert issues[0]["details"]["issue_kind"] == "logical.escalation.no_satisfying_topology"
+    assert issues[0]["details"]["repair_target"] == "constraint"
+
+
+def test_view_escalate_rejects_unknown_kind() -> None:
+    view = TGraphView(_node_local_graph())
+
+    try:
+        view.escalate("logical.topology.direct.missing_edge", "not an escalation")
+    except ValueError as exc:
+        assert "unsupported escalation issue kind" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_view_paths_use_node_scoped_link_endpoints() -> None:
     view = TGraphView(_node_local_graph())
 

@@ -1,5 +1,3 @@
-import threading
-
 from tgraph import TGraph, validate_graph
 import tgraph.operations.validate.f4_intent as f4_module
 from tgraph.operations.validate import CheckpointFileExecutionResult, ValidationContext, ValidationPolicy
@@ -87,7 +85,7 @@ def test_validate_graph_checks_required_node_fields() -> None:
     assert _issue_kinds(report) == ["missing_required_node_field", "missing_required_node_field"]
 
 
-def test_checkpoint_file_execution_respects_process_limit(tmp_path, monkeypatch) -> None:
+def test_checkpoint_file_execution_runs_scopes_serially(tmp_path, monkeypatch) -> None:
     logical_constraints = tmp_path / "logical_constraints.json"
     physical_constraints = tmp_path / "physical_constraints.json"
     logical_constraints.write_text('{"lc1": {"kind": "logical.custom", "statement": "logical"}}', encoding="utf-8")
@@ -99,23 +97,19 @@ def test_checkpoint_file_execution_respects_process_limit(tmp_path, monkeypatch)
 
     active = 0
     max_seen = 0
-    lock = threading.Lock()
-    barrier = threading.Barrier(2)
+    call_order: list[str] = []
 
-    def fake_execute(*args, **kwargs):
-        del args, kwargs
+    def fake_execute(_graph, *, constraints, checkpoint_path, **kwargs):
+        del kwargs
         nonlocal active, max_seen
-        with lock:
-            active += 1
-            max_seen = max(max_seen, active)
+        scope = "logical" if "logical" in str(checkpoint_path) else "physical"
+        call_order.append(scope)
+        active += 1
+        max_seen = max(max_seen, active)
         try:
-            barrier.wait(timeout=1)
-        except threading.BrokenBarrierError:
-            pass
+            return CheckpointFileExecutionResult(ok=True, issues=[])
         finally:
-            with lock:
-                active -= 1
-        return CheckpointFileExecutionResult(ok=True, issues=[])
+            active -= 1
 
     monkeypatch.setattr(f4_module, "execute_checkpoint_file", fake_execute)
 
@@ -125,12 +119,12 @@ def test_checkpoint_file_execution_respects_process_limit(tmp_path, monkeypatch)
         context=ValidationContext(
             constraint_files={"logical": logical_constraints, "physical": physical_constraints},
             checkpoint_files={"logical": logical_checkpoint, "physical": physical_checkpoint},
-            checkpoint_max_processes=2,
         ),
     )
 
     assert report.ok is True
-    assert max_seen == 2
+    assert max_seen == 1
+    assert call_order == ["logical", "physical"]
 
 
 def _issue_kinds(report):

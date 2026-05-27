@@ -7,6 +7,7 @@ from itertools import product
 from typing import Any, Mapping
 
 from tgraph.core.graph import TGraph
+from tgraph.operations.validate.escalation_kinds import ESCALATION_ISSUE_KINDS
 
 
 def issue(
@@ -316,6 +317,51 @@ class TGraphView:
 
     def node_ids(self) -> set[str]:
         return set(self._nodes_by_id)
+
+    def issue(
+        self,
+        issue_kind: str,
+        message: str,
+        *,
+        severity: str = "error",
+        location: str | None = None,
+        targets: list[str] | None = None,
+        fact_kind: str | None = None,
+        repair_target: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return issue(
+            issue_kind,
+            message,
+            severity=severity,
+            location=location,
+            targets=targets,
+            fact_kind=fact_kind,
+            repair_target=repair_target,
+            details=details,
+        )
+
+    def escalate(
+        self,
+        issue_kind: str,
+        message: str,
+        *,
+        targets: list[str] | None = None,
+        fact_kind: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if issue_kind not in ESCALATION_ISSUE_KINDS:
+            raise ValueError(f"unsupported escalation issue kind: {issue_kind}")
+        return [
+            self.issue(
+                issue_kind,
+                message,
+                targets=targets,
+                fact_kind=fact_kind,
+                repair_target="constraint",
+                details=details,
+            )
+        ]
 
     def check_subnet(self, switch: str, cidr: str) -> list[dict[str, Any]]:
         fact_kind = "logical.addressing.subnet"

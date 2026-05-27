@@ -25,5 +25,5 @@ class ValidationContext(BaseModel):
     constraint_files: dict[str, str | Path] = Field(default_factory=dict)
     checkpoint_files: dict[str, str | Path] = Field(default_factory=dict)
     checkpoint_timeout_seconds: float = 5.0
-    checkpoint_max_processes: int = 4
+    checkpoint_max_processes: int = 1
     references: dict[str, TGraph] = Field(default_factory=dict)

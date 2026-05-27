@@ -10,6 +10,32 @@ Use inspect for current context, controlled mutation for graph edits, and valida
 
 Use checkpoint files for intent checks that do not belong in the graph shape itself. Each function is named `check_<constraint_id>(tgraph)` and should normally call one of the formal `tgraph.check_*` APIs.
 
+## Escalation (return to ground)
+
+Use escalation issue kinds **only** when the constraint itself is wrong or mutually unsatisfiable — not when the graph is merely incomplete or misconfigured (those belong in repair).
+
+Allowed kinds:
+
+- `logical.escalation.constraint_conflict`
+- `logical.escalation.no_satisfying_topology`
+- `physical.escalation.no_satisfying_image`
+- `physical.escalation.no_satisfying_flavor`
+
+Example:
+
+```python
+def check_lc12(tgraph):
+    if lc12_conflicts_with_lc15(tgraph):
+        return tgraph.escalate(
+            "logical.escalation.constraint_conflict",
+            "lc12 ring and lc15 star cannot both hold on R1,R2,R3",
+            targets=["R1", "R2", "R3"],
+        )
+    return tgraph.check_ring(["R1", "R2", "R3", "R1"])
+```
+
+There is no `check_cidr` API — use `check_subnet(switch, cidr)`.
+
 Network intent must stay CIDR-centered. Do not invent segment-style IR fields.
 
 Do not invent workflow, knowledge, catalog, image, flavor, or domain assumptions inside TGraph. Put caller-owned context in the outer application.

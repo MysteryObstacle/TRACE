@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from tgraph.core.graph import TGraph
 from tgraph.operations._execution_mode import use_inline_execution
+from tgraph.operations._subprocess_runner import read_subprocess_result, terminate_subprocess_worker
 from tgraph.operations.mutate.editor import TGraphEditor
 from tgraph.operations.validate.issues import ValidationIssue, validation_issue
 from tgraph.operations.validate.policy import ValidationContext, ValidationPolicy
@@ -71,36 +72,42 @@ def execute_mutation_file(
                     details={"timeout_seconds": timeout_seconds, "scope": "file"},
                 )
             )
+        try:
+            payload = result_queue.get_nowait()
+        except queue.Empty:
+            return _failed(
+                _file_issue(
+                    "mutation.execution.exception",
+                    "mutation file exited without a result",
+                    source_path=source_path,
+                    details={"scope": "file"},
+                )
+            )
     else:
         context = mp.get_context("spawn")
         result_queue = context.Queue()
         worker = context.Process(target=_mutation_worker, args=(result_queue, *worker_args))
         worker.start()
-        worker.join(timeout_seconds)
-
-        if worker.is_alive():
-            worker.terminate()
-            worker.join()
+        payload = read_subprocess_result(worker, result_queue, timeout_seconds)
+        if payload is None:
+            if worker.is_alive():
+                terminate_subprocess_worker(worker)
+                return _failed(
+                    _file_issue(
+                        "mutation.execution.timeout",
+                        f"mutation file exceeded timeout of {timeout_seconds} seconds",
+                        source_path=source_path,
+                        details={"timeout_seconds": timeout_seconds, "scope": "file"},
+                    )
+                )
             return _failed(
                 _file_issue(
-                    "mutation.execution.timeout",
-                    f"mutation file exceeded timeout of {timeout_seconds} seconds",
+                    "mutation.execution.exception",
+                    "mutation file exited without a result",
                     source_path=source_path,
-                    details={"timeout_seconds": timeout_seconds, "scope": "file"},
+                    details={"scope": "file"},
                 )
             )
-
-    try:
-        payload = result_queue.get_nowait()
-    except queue.Empty:
-        return _failed(
-            _file_issue(
-                "mutation.execution.exception",
-                "mutation file exited without a result",
-                source_path=source_path,
-                details={"scope": "file"},
-            )
-        )
 
     issues = [ValidationIssue.model_validate(item) for item in payload.get("issues", [])]
     if issues:

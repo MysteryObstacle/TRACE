@@ -98,5 +98,23 @@ def mutate(tgraph):
     assert _issue_kinds(result) == ["mutation.execution.exception"]
 
 
+def test_spawn_path_returns_graph_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("TGRAPH_EXECUTION_MODE", raising=False)
+    mutation_path = tmp_path / "attempt_1.py"
+    mutation_path.write_text(
+        """
+def mutate(tgraph):
+    tgraph.ensure_direct_link("WEB", "SW_DMZ")
+""",
+        encoding="utf-8",
+    )
+
+    result = execute_mutation_file(_graph(), mutation_path=mutation_path, timeout_seconds=5.0)
+
+    assert result.ok is True
+    assert result.graph is not None
+    assert [link.id for link in result.graph.links] == ["SW_DMZ-WEB-1"]
+
+
 def _issue_kinds(result):
     return [issue.details.get("issue_kind") for issue in result.issues]

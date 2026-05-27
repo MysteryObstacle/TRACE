@@ -3,13 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from tgraph.operations.validate.escalation_kinds import ESCALATION_ISSUE_KINDS
 
-ESCALATION_TO_GROUND_KINDS: frozenset[str] = frozenset({
-    "logical.escalation.constraint_conflict",
-    "logical.escalation.no_satisfying_topology",
-    "physical.escalation.no_satisfying_image",
-    "physical.escalation.no_satisfying_flavor",
-})
+ESCALATION_TO_GROUND_KINDS = ESCALATION_ISSUE_KINDS
 
 
 def extract_escalation_issues(report: dict[str, Any] | None) -> list[dict[str, Any]]:

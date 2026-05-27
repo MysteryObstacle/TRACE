@@ -144,5 +144,57 @@ def check_lc1(tgraph):
     assert result.issues[0].details["scope"] == "file"
 
 
+def test_spawn_path_does_not_deadlock_with_many_issues(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("TGRAPH_EXECUTION_MODE", raising=False)
+    constraints = {
+        f"lc{i}": ConstraintFact(
+            kind="logical.subnet.membership",
+            statement=f"node belongs to subnet for lc{i}",
+        )
+        for i in range(1, 28)
+    }
+    lines = [
+        f'def check_lc{i}(tgraph):\n    return tgraph.check_subnet("SW_DMZ", "10.10.10.0/24")\n'
+        for i in range(1, 28)
+    ]
+    checkpoint_path = tmp_path / "checkpoints.py"
+    checkpoint_path.write_text("".join(lines), encoding="utf-8")
+
+    result = execute_checkpoint_file(
+        _graph(),
+        constraints=constraints,
+        checkpoint_path=checkpoint_path,
+        timeout_seconds=5.0,
+    )
+
+    assert not any(issue.details.get("issue_kind") == "checkpoint.execution.timeout" for issue in result.issues)
+    assert len(result.issues) == 27
+
+
+def test_checkpoint_escalation_kind_via_escalate_helper(tmp_path) -> None:
+    checkpoint_path = tmp_path / "checkpoints.py"
+    checkpoint_path.write_text(
+        """
+def check_lc1(tgraph):
+    return tgraph.escalate(
+        "logical.escalation.constraint_conflict",
+        "lc1 conflicts with lc2",
+        targets=["R1"],
+    )
+""",
+        encoding="utf-8",
+    )
+
+    result = execute_checkpoint_file(
+        _graph(),
+        constraints=_constraints(),
+        checkpoint_path=checkpoint_path,
+    )
+
+    assert result.ok is False
+    assert _issue_kinds(result) == ["logical.escalation.constraint_conflict"]
+    assert result.issues[0].details["repair_target"] == "constraint"
+
+
 def _issue_kinds(result):
     return [issue.details.get("issue_kind") for issue in result.issues]
