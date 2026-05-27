@@ -1,0 +1,1521 @@
+# TRACE Agent Engineering Optimization Implementation Plan
+
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Trim TRACE agent prompts and tools, expose image catalog as agent tools, introduce ledger product-pointers and mutation-incrementality, converge on LangGraph 1.x native features (reducer, Command, SqliteSaver), and add a ground-escalation feedback channel — all of the eight problems observed in `runs/demo-007`.
+
+**Architecture:** Four sequential PRs / chunks. PR1 (Chunk 1) is pure surface integrity: prompts, tool returns, file filtering, image catalog tools — zero runtime state-machine changes. PR2 (Chunk 2) introduces a deterministic produced-files ledger and a `diff` inspect view, paving the way for mutation incrementality. PR3 (Chunk 3) converges the runtime onto LangGraph 1.x: list reducers, Command-based routing, ChatOpenAI caching. PR4 (Chunk 4) layers in SqliteSaver checkpointing with a clear RunStorage dual-track contract, plus the escalation channel back to `ground.author`.
+
+**Tech Stack:** Python 3.10, Pydantic v2, LangGraph 1.1.x (`StateGraph`, `create_react_agent`, `Command`, `SqliteSaver`), LangChain 1.2.x (`@tool`, `ChatOpenAI`), pytest, AST-based mutation sandboxing.
+
+---
+
+## Reference Spec
+
+- `docs/superpowers/specs/2026-05-27-trace-agent-engineering-optimization-design.md`
+
+The spec is the source of truth for design intent. This plan operationalizes it into bite-sized TDD tasks.
+
+## Glossary For This Plan
+
+- **agent role** = a tool-using react agent (logical / physical author, builder, repair). Final-message-as-action-summary constraint applies here.
+- **structured role** = a `with_structured_output` JSON-only role (ground author, ground evaluator). Final-message constraint does NOT apply (would contradict "Return only a JSON object").
+- **physical scope tools** = `find_images` / `get_image`. Only wired into physical agent tool lists (per spec).
+- **stage tools (`StageRepairTools`)** = shared by logical and physical builder/repair. Default surface is stage-agnostic; an `include_image_tools=False` flag lets physical callers opt in.
+
+## File Structure Map
+
+### Chunk 1 — PR1 prompt and tool surface cleanup
+
+Source files (logic change):
+
+- `src/trace/stages/support_files.py` — add `_FilterParams` mixin, `filtered_view` helper.
+- `src/trace/stages/repair_tools.py` — add `MutationSummary` model and `_derive_op_counts`; extend `_ReadSupportFileInput` with `_FilterParams`; add `_FindImagesInput` / `_GetImageInput`; add `list_support_files`; `as_agent_tools(include_image_tools=False)` flag; pass `include_graph` through `_ExecuteMutationFileInput`.
+- `src/trace/stages/logical/nodes/builder.py` — drop `graph_summary` injection + `_graph_summary` helper.
+- `src/trace/stages/physical/nodes/builder.py` — drop `graph_summary` + `_graph_summary`; remove `image_catalog` key from `system_context_sections`; build `StageRepairTools` with `include_image_tools=True`.
+- `src/trace/stages/physical/nodes/author.py` — drop `graph_summary` + `_graph_summary`; remove `image_catalog` from `system_context_sections`; `PhysicalAuthorTools.as_agent_tools()` adds `find_images` / `get_image`; `read_constraint_file` closure uses `_FilterParams`.
+- `src/trace/stages/physical/nodes/repair.py` — drop the `Image catalog for this repair round:` system message and the `image_catalog` parameter of `_build_repair_messages`; build `StageRepairTools` with `include_image_tools=True`.
+- `src/trace/stages/logical/nodes/author.py` — extend `read_constraint_file` closure with `_FilterParams`.
+- `src/trace/stages/logical/prompts/author.md` — strip `## TGraph Check API` block.
+- `src/trace/stages/logical/prompts/builder.md` — strip `## Mutation Contract` API list; rewrite the segment-vs-IR contradiction.
+- `src/trace/stages/logical/prompts/repair.md` — strip `## Available Tools` API listing.
+- `src/trace/stages/physical/prompts/author.md` — strip `## TGraph Check API`; add `## Kind→Tool Decision Table`.
+- `src/trace/stages/physical/prompts/builder.md` — strip `## Mutation Contract` API list; add switch-iteration hint.
+- `src/trace/stages/physical/prompts/repair.md` — strip `## Available Tools`.
+- All six **agent role** prompts above — append final-message constraint.
+- `src/trace/stages/ground/prompts/author.md` — UNCHANGED (structured role).
+- `src/trace/stages/ground/prompts/evaluator.md` — UNCHANGED (structured role).
+- `src/tgraph/agent/playbooks/authoring.md` — ADD a TGraph Check / Editor API block that **explicitly** describes `check_interface` and `ensure_interface` with `segment` required and clarifies "`segment` is the neighboring switch / segment-carrier node id, not an IR field".
+- `src/tgraph/agent/playbooks/capabilities.md` — at line 29 remove the `segment` token from the "unsupported IR fields" enumeration (because `segment` is a function parameter, not an IR field; keep the others: `software`, `packages`, `zone`, `firewall_rules`).
+- `src/tgraph/agent/docs/tgraph_check_api.md` — update `check_interface` signature line to call out `segment` required; add a one-line note on parameter-vs-IR-field.
+- `src/tgraph/agent/docs/tgraph_editor_api.md` — same for `ensure_interface`.
+- `src/tgraph/agent/playbooks/repair.md` — add line: "When choosing images, use `find_images` / `get_image` agent tools. Do not recall `image_id` from memory."
+
+Existing tests that MUST be updated (logic changes break them):
+
+- `tests/unit/stages/physical/test_physical_author_node.py` L42-43: `[image_catalog]` / `img_pfsense` assertions → replace with negative assertions + assert `find_images` / `get_image` in `tool_names`.
+- `tests/unit/stages/physical/test_physical_builder_node.py` L84-98: exact `tool_names == [...]` + `[image_catalog]` / `img_pfsense` / `[graph_summary]` → replace with set-based contains assertions (no `[graph_summary]`, no `[image_catalog]`, includes `find_images`/`get_image`).
+- `tests/unit/stages/physical/test_physical_repair_node.py` L71-78 + L131-132: exact `tool_names == [...]` + image_catalog assertions → replace with set-based assertions; assert `Image catalog for this repair round:` NOT present.
+- `tests/unit/stages/logical/test_builder_node.py` L74-88: exact `tool_names == [...]` + `[graph_summary]` → replace with set-based assertions (no `find_images` in logical), no `[graph_summary]`.
+- `tests/unit/stages/logical/test_author_node.py` and `test_repair_node.py`: any `tool_names == [...]` exact assertion → switch to set-based contains.
+
+New tests:
+
+- `tests/unit/stages/test_repair_tools_summary.py` — MutationSummary + `_derive_op_counts` + `include_graph` flag.
+- `tests/unit/stages/test_support_files_filtered.py` — `filtered_view` and `_FilterParams`.
+- `tests/unit/stages/test_filtered_read_tools.py` — three-call-site filtered read integration.
+- `tests/unit/stages/test_image_tools.py` — `find_images` / `get_image` tool wrappers (physical scope).
+- `tests/unit/stages/test_image_tools_logical_scope.py` — assertion that logical `StageRepairTools.as_agent_tools()` does NOT expose `find_images` / `get_image` by default.
+- `tests/unit/stages/test_prompts_surface.py` — no `tgraph.check_` / `tgraph.ensure_` / `tgraph.set_image` / `tgraph.set_flavor` listings in `src/trace/stages/*/prompts/*.md`; final-message constraint present in six agent prompts only; kind→tool table present; switch hint present; logical builder no longer forbids `segment` token.
+- `tests/unit/tgraph/agent/test_playbook_segment.py` — playbook authoring marks `segment` required and clarifies parameter-vs-IR-field; capabilities no longer lists `segment` as unsupported IR field; repair playbook mentions `find_images` / `get_image`.
+
+### Chunk 2 — PR2 ledger product-pointers and mutation incrementality
+
+(Detailed file structure for Chunks 2/3/4 will be appended after Chunk 1 reviewer approves.)
+
+---
+
+## Chunk 1: PR1 — Prompt And Tool Surface Cleanup
+
+This chunk produces working software on its own. After PR1 merges, the agent's prompt/tool surface is leaner; the runtime state machine is unchanged.
+
+**Branch / commit cadence:** ~14 commits, one per task. Final commit re-runs full pytest + demo smoke.
+
+### Task 1.1: Add `MutationSummary` schema and shared `_derive_op_counts` helper
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py`
+- Create test: `tests/unit/stages/test_repair_tools_summary.py`
+
+- [ ] **Step 1: Write failing tests for MutationSummary derivation**
+
+Create `tests/unit/stages/test_repair_tools_summary.py`:
+
+```python
+from trace.stages.repair_tools import MutationSummary, _derive_op_counts
+
+
+def test_derive_op_counts_aggregates_by_op_name():
+    operations = [
+        {"op": "ensure_direct_link", "link": "A-B-1", "nodes": ["A", "B"], "link_key": "1"},
+        {"op": "ensure_direct_link", "link": "B-C-1", "nodes": ["B", "C"], "link_key": "1"},
+        {"op": "set_image", "node": "A", "image_id": "img_pfsense"},
+    ]
+    assert _derive_op_counts(operations) == {"ensure_direct_link": 2, "set_image": 1}
+
+
+def test_mutation_summary_affected_node_ids_from_scalar_and_list_fields():
+    operations = [
+        {"op": "ensure_node", "node": "A"},
+        {"op": "ensure_direct_link", "link": "A-B-1", "nodes": ["A", "B"]},
+        {"op": "set_image", "node": "B", "image_id": "img_pfsense"},
+        {"op": "ensure_interface", "node": "C", "segment": "B", "cidr": "10.0.0.0/24", "ip": None},
+        {"op": "remove_links", "links_removed": ["X-Y-1"], "ports_removed": ["X._Y-1", "Y._X-1"]},
+    ]
+    summary = MutationSummary.from_operations(stage="logical", node_count=10, link_count=8, operations=operations)
+    assert summary.affected_node_ids == ["A", "B", "C", "X", "Y"]
+    assert summary.affected_link_ids == ["A-B-1", "X-Y-1"]
+    assert summary.op_counts == {
+        "ensure_node": 1,
+        "ensure_direct_link": 1,
+        "set_image": 1,
+        "ensure_interface": 1,
+        "remove_links": 1,
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_repair_tools_summary.py -v`
+Expected: FAIL with `ImportError: cannot import name 'MutationSummary'` and `_derive_op_counts`.
+
+- [ ] **Step 3: Implement MutationSummary and helper**
+
+Add to `src/trace/stages/repair_tools.py` (top-level, before `StageRepairTools`):
+
+```python
+from collections import Counter
+
+
+class MutationSummary(BaseModel):
+    stage: str
+    node_count: int
+    link_count: int
+    affected_node_ids: list[str]
+    affected_link_ids: list[str]
+    op_counts: dict[str, int]
+
+    @classmethod
+    def from_operations(
+        cls,
+        *,
+        stage: str,
+        node_count: int,
+        link_count: int,
+        operations: list[dict[str, Any]],
+    ) -> "MutationSummary":
+        node_ids: set[str] = set()
+        link_ids: set[str] = set()
+        for op in operations:
+            if isinstance(op.get("node"), str):
+                node_ids.add(op["node"])
+            if isinstance(op.get("nodes"), list):
+                node_ids.update(item for item in op["nodes"] if isinstance(item, str))
+            if isinstance(op.get("segment"), str):
+                node_ids.add(op["segment"])
+            if isinstance(op.get("link"), str):
+                link_ids.add(op["link"])
+            if isinstance(op.get("links_removed"), list):
+                link_ids.update(item for item in op["links_removed"] if isinstance(item, str))
+            if isinstance(op.get("ports_removed"), list):
+                for token in op["ports_removed"]:
+                    if not isinstance(token, str):
+                        continue
+                    node_part = token.split(".", 1)[0]
+                    if node_part:
+                        node_ids.add(node_part)
+        return cls(
+            stage=stage,
+            node_count=node_count,
+            link_count=link_count,
+            affected_node_ids=sorted(node_ids),
+            affected_link_ids=sorted(link_ids),
+            op_counts=_derive_op_counts(operations),
+        )
+
+
+def _derive_op_counts(operations: list[dict[str, Any]]) -> dict[str, int]:
+    return dict(Counter(op.get("op", "") for op in operations if op.get("op")))
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_repair_tools_summary.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/unit/stages/test_repair_tools_summary.py src/trace/stages/repair_tools.py
+git commit -m "feat(repair_tools): add MutationSummary schema and op_counts helper"
+```
+
+### Task 1.2: Slim `execute_mutation_file` return; add `include_graph` flag
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py`
+- Modify: `tests/unit/stages/test_repair_tools_summary.py` (extend)
+- Existing tests asserting `result["graph"]` will be updated in their own task (1.3 and 1.9).
+
+- [ ] **Step 1: Extend tests for new return contract**
+
+Append to `tests/unit/stages/test_repair_tools_summary.py`:
+
+```python
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed_logical_graph_dict() -> dict:
+    return {
+        "stage": "logical",
+        "nodes": [
+            {"id": "SW_DMZ", "type": "switch", "label": "SW_DMZ", "ports": []},
+        ],
+        "links": [],
+    }
+
+
+def test_execute_mutation_file_returns_summary_only_by_default(tmp_path):
+    artifact = {"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    write = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    tgraph.ensure_subnet('SW_DMZ', cidr='10.10.10.0/24')\n",
+        path="logical/mutations/test.py",
+    )
+    result = tools.execute_mutation_file(path=write["path"], validate=False)
+    assert result["ok"] is True
+    assert "summary" in result
+    assert "graph" not in result
+    assert result["summary"]["op_counts"] == {"ensure_subnet": 1}
+
+
+def test_execute_mutation_file_includes_graph_when_requested(tmp_path):
+    artifact = {"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}}
+    tools = StageRepairTools(artifact, support_file_root=str(tmp_path))
+    write = tools.write_mutation_file(
+        content="def mutate(tgraph):\n    tgraph.ensure_subnet('SW_DMZ', cidr='10.10.10.0/24')\n",
+        path="logical/mutations/test.py",
+    )
+    result = tools.execute_mutation_file(path=write["path"], validate=False, include_graph=True)
+    assert "graph" in result
+    assert result["graph"]["stage"] == "logical"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_repair_tools_summary.py -v`
+Expected: FAIL — current implementation always returns `graph` and no `summary`.
+
+- [ ] **Step 3: Modify `StageRepairTools.execute_mutation_file` signature and body**
+
+```python
+def execute_mutation_file(self, *, path: str, validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
+    normalized = _safe_relative_path(path)
+    if normalized not in self._support_files:
+        return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
+    mutation_path = self._materialize_support_file(normalized)
+    result = execute_mutation_file(
+        self._graph_model(),
+        mutation_path=mutation_path,
+        validate=validate,
+        validation_context=self._validation_context(),
+    )
+    operations = list(result.operations or [])
+    if result.ok and result.graph is not None:
+        self._artifact["graph"] = result.graph.model_dump(mode="json")
+    graph_model = self._graph_model()
+    summary = MutationSummary.from_operations(
+        stage=graph_model.stage,
+        node_count=len(graph_model.nodes),
+        link_count=len(graph_model.links),
+        operations=operations,
+    )
+    payload: dict[str, Any] = {
+        "ok": result.ok,
+        "operations": [dict(op) for op in operations],
+        "summary": summary.model_dump(mode="json"),
+    }
+    if not result.ok:
+        payload["issues"] = [issue.model_dump(mode="json") for issue in result.issues]
+    if include_graph and result.graph is not None:
+        payload["graph"] = result.graph.model_dump(mode="json")
+    return payload
+```
+
+- [ ] **Step 4: Update the tool wrapper to expose `include_graph`**
+
+Inside `as_agent_tools(...)`, update `_ExecuteMutationFileInput`:
+
+```python
+class _ExecuteMutationFileInput(BaseModel):
+    path: str
+    run_validate: bool = Field(default=True, alias="validate")
+    include_graph: bool = False
+```
+
+And the `execute_mutation_file_tool` closure:
+
+```python
+@tool("execute_mutation_file", args_schema=_ExecuteMutationFileInput)
+def execute_mutation_file_tool(path: str, run_validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
+    """Execute a mutation file transactionally. Returns ok + operations + summary; pass include_graph=true to also receive the full graph."""
+    return self.execute_mutation_file(path=path, validate=run_validate, include_graph=include_graph)
+```
+
+- [ ] **Step 5: Run focused tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_repair_tools_summary.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_repair_tools_summary.py
+git commit -m "feat(repair_tools): slim execute_mutation_file return; add include_graph flag"
+```
+
+### Task 1.3: Remove `graph_summary` injection and update breaking tests
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/builder.py` (drop `graph_summary` context key; drop `_graph_summary` helper)
+- Modify: `src/trace/stages/physical/nodes/author.py` (same)
+- Modify: `src/trace/stages/physical/nodes/builder.py` (same)
+- Modify existing tests:
+  - `tests/unit/stages/logical/test_builder_node.py` L88 (`assert "[graph_summary]" in human_content` → assert NOT present)
+  - `tests/unit/stages/physical/test_physical_builder_node.py` L98 (same)
+  - There is no `graph_summary` assertion in `test_physical_author_node.py`; verify with `rg "graph_summary" tests/unit/stages` before this task.
+
+- [ ] **Step 1: Inventory current `graph_summary` references**
+
+Run: `rg -n "graph_summary|_graph_summary" src/trace tests/unit`
+Expected output: 3 source files (each with 2 hits: context key + helper definition) + 2 test files (each with 1 hit).
+
+- [ ] **Step 2: Flip test assertions to negative**
+
+In `tests/unit/stages/logical/test_builder_node.py` change L88 from
+```python
+assert "[graph_summary]" in human_content
+```
+to
+```python
+assert "[graph_summary]" not in human_content
+```
+
+Same flip in `tests/unit/stages/physical/test_physical_builder_node.py` L98.
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/logical/test_builder_node.py tests/unit/stages/physical/test_physical_builder_node.py -v`
+Expected: FAIL (graph_summary still being injected).
+
+- [ ] **Step 4: Delete `graph_summary` from three source files**
+
+In `src/trace/stages/logical/nodes/builder.py`:
+- Remove `"graph_summary": _graph_summary(artifact.get("graph", {}))` from the `context_sections` dict.
+- Remove the `def _graph_summary(...)` function definition.
+
+In `src/trace/stages/physical/nodes/author.py`:
+- Remove `"graph_summary": _graph_summary(state["logical_artifact"]["graph"])` from the `context_sections` dict.
+- Remove the `def _graph_summary(...)` function definition.
+
+In `src/trace/stages/physical/nodes/builder.py`:
+- Remove `"graph_summary": _graph_summary(artifact.get("graph", {}))` from the `context_sections` dict.
+- Remove the `def _graph_summary(...)` function definition.
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages -v`
+Expected: PASS for both builder tests; other unrelated stage tests still PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/logical/nodes/builder.py src/trace/stages/physical/nodes/author.py src/trace/stages/physical/nodes/builder.py tests/unit/stages/logical/test_builder_node.py tests/unit/stages/physical/test_physical_builder_node.py
+git commit -m "refactor(stages): drop graph_summary injection in builder/author contexts"
+```
+
+### Task 1.4: Add `_FilterParams` mixin and `filtered_view` helper
+
+**Files:**
+- Modify: `src/trace/stages/support_files.py`
+- Create test: `tests/unit/stages/test_support_files_filtered.py`
+
+- [ ] **Step 1: Write failing tests**
+
+Create `tests/unit/stages/test_support_files_filtered.py`:
+
+```python
+import json
+from trace.stages.support_files import filtered_view, _FilterParams
+
+
+SAMPLE_JSON = json.dumps({
+    "lc1": {"statement": "SW_DMZ is subnet 10.10.10.0/24.", "kind": "logical.addressing.subnet"},
+    "lc17": {"statement": "Routers require fixed IPv4.", "kind": "logical.custom"},
+}, indent=2)
+
+
+def test_filter_params_defaults_all_none():
+    params = _FilterParams()
+    assert params.match is None and params.keys is None and params.head_lines is None
+
+
+def test_filtered_view_returns_full_content_when_no_filter():
+    assert filtered_view(SAMPLE_JSON) == SAMPLE_JSON
+
+
+def test_filtered_view_match_returns_line_window():
+    out = filtered_view(SAMPLE_JSON, match="lc17")
+    assert "lc17" in out
+    assert "Routers require fixed IPv4" in out  # context +/-1 line
+    assert "lc1\"" not in out  # other key not in window
+
+
+def test_filtered_view_keys_returns_subdocument():
+    out = filtered_view(SAMPLE_JSON, keys=["lc17"])
+    parsed = json.loads(out)
+    assert list(parsed.keys()) == ["lc17"]
+
+
+def test_filtered_view_keys_ignored_when_not_json_object():
+    plain = "line a\nline b\nline c\n"
+    assert filtered_view(plain, keys=["a"]) == plain
+
+
+def test_filtered_view_head_lines():
+    plain = "\n".join(f"line {i}" for i in range(20))
+    out = filtered_view(plain, head_lines=3)
+    assert out.splitlines() == ["line 0", "line 1", "line 2"]
+
+
+def test_filtered_view_priority_match_over_keys_over_head_lines():
+    out = filtered_view(SAMPLE_JSON, match="lc17", keys=["lc1"], head_lines=2)
+    assert "lc17" in out  # match wins
+    assert "lc1\"" not in out
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_support_files_filtered.py -v`
+Expected: FAIL with `ImportError`.
+
+- [ ] **Step 3: Implement `_FilterParams` and `filtered_view`**
+
+Append to `src/trace/stages/support_files.py`:
+
+```python
+from pydantic import BaseModel
+
+
+class _FilterParams(BaseModel):
+    match: str | None = None
+    keys: list[str] | None = None
+    head_lines: int | None = None
+
+
+def filtered_view(
+    content: str,
+    *,
+    match: str | None = None,
+    keys: list[str] | None = None,
+    head_lines: int | None = None,
+) -> str:
+    if match:
+        return _match_window(content, needle=match, context=1)
+    if keys:
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return content
+        if not isinstance(parsed, dict):
+            return content
+        subset = {key: parsed[key] for key in keys if key in parsed}
+        return json.dumps(subset, indent=2, ensure_ascii=False)
+    if head_lines is not None and head_lines >= 0:
+        return "\n".join(content.splitlines()[:head_lines])
+    return content
+
+
+def _match_window(content: str, *, needle: str, context: int) -> str:
+    lines = content.splitlines()
+    selected: set[int] = set()
+    for idx, line in enumerate(lines):
+        if needle in line:
+            start = max(0, idx - context)
+            stop = min(len(lines), idx + context + 1)
+            selected.update(range(start, stop))
+    return "\n".join(lines[i] for i in sorted(selected))
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_support_files_filtered.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/support_files.py tests/unit/stages/test_support_files_filtered.py
+git commit -m "feat(support_files): add _FilterParams mixin and filtered_view helper"
+```
+
+### Task 1.5: Wire `_FilterParams` into `read_support_file` and both `read_constraint_file` tools
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py` (`_ReadSupportFileInput` inherits `_FilterParams`; `read_support_file` method accepts filter kwargs; tool wrapper passes them)
+- Modify: `src/trace/stages/logical/nodes/author.py` (`_ReadLogicalConstraintInput` inherits `_FilterParams`; closure uses `filtered_view`)
+- Modify: `src/trace/stages/physical/nodes/author.py` (`_ReadPhysicalConstraintInput` inherits `_FilterParams`; closure uses `filtered_view`)
+- Create test: `tests/unit/stages/test_filtered_read_tools.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_filtered_read_tools.py
+import json
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed_artifact():
+    return {
+        "graph": {"stage": "logical", "nodes": [{"id": "A", "type": "computer", "label": "A", "ports": []}], "links": []},
+        "constraint_files": {"logical": "ground/logical_constraints.json"},
+        "checkpoint_files": {},
+    }
+
+
+def test_read_support_file_match():
+    payload = {f"lc{i}": {"statement": f"lc{i}-stmt", "kind": "logical.custom"} for i in range(1, 18)}
+    tools = StageRepairTools(_seed_artifact(), support_files={"ground/logical_constraints.json": json.dumps(payload, indent=2)})
+    result = tools.read_support_file(path="ground/logical_constraints.json", match="lc17")
+    assert result["ok"] is True
+    assert "lc17" in result["content"]
+    assert "lc16-stmt" not in result["content"]
+
+
+def test_read_support_file_keys():
+    payload = {"lc1": {"statement": "a"}, "lc17": {"statement": "z"}}
+    tools = StageRepairTools(_seed_artifact(), support_files={"ground/logical_constraints.json": json.dumps(payload, indent=2)})
+    result = tools.read_support_file(path="ground/logical_constraints.json", keys=["lc17"])
+    parsed = json.loads(result["content"])
+    assert parsed == {"lc17": {"statement": "z"}}
+
+
+def test_read_support_file_tool_surface_accepts_filter_params():
+    payload = {"lc1": {"statement": "a"}, "lc17": {"statement": "z"}}
+    tools = StageRepairTools(_seed_artifact(), support_files={"ground/logical_constraints.json": json.dumps(payload, indent=2)})
+    bound = {tool.name: tool for tool in tools.as_agent_tools()}
+    result = bound["read_support_file"].invoke({"path": "ground/logical_constraints.json", "match": "lc17"})
+    assert "lc17" in result["content"]
+
+
+def test_logical_author_read_constraint_file_supports_filter():
+    from trace.stages.logical.nodes.author import LogicalAuthorTools
+    state = {
+        "support_files": {
+            "ground/logical_constraints.json": json.dumps(
+                {"lc1": {"statement": "a"}, "lc17": {"statement": "z"}}, indent=2
+            )
+        }
+    }
+    tools = LogicalAuthorTools(state=state, logical_constraints=[{"id": "lc1"}, {"id": "lc17"}]).as_agent_tools()
+    bound = {tool.name: tool for tool in tools}
+    out = bound["read_constraint_file"].invoke({"path": "ground/logical_constraints.json", "keys": ["lc17"]})
+    parsed = json.loads(out["content"])
+    assert parsed == {"lc17": {"statement": "z"}}
+
+
+def test_physical_author_read_constraint_file_supports_filter():
+    from trace.stages.physical.nodes.author import PhysicalAuthorTools
+    state = {
+        "support_files": {
+            "ground/physical_constraints.json": json.dumps(
+                {"pc1": {"statement": "a"}, "pc2": {"statement": "z"}}, indent=2
+            )
+        }
+    }
+    tools = PhysicalAuthorTools(state=state, physical_constraints=[{"id": "pc1"}, {"id": "pc2"}]).as_agent_tools()
+    bound = {tool.name: tool for tool in tools}
+    out = bound["read_constraint_file"].invoke({"path": "ground/physical_constraints.json", "match": "pc2"})
+    assert "pc2" in out["content"]
+    assert "pc1\"" not in out["content"]
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_filtered_read_tools.py -v`
+Expected: FAIL — current tools don't accept filter kwargs.
+
+- [ ] **Step 3: Update `_ReadSupportFileInput` and `read_support_file` in repair_tools**
+
+In `repair_tools.py`:
+
+```python
+from trace.stages.support_files import _FilterParams, filtered_view
+
+
+class _ReadSupportFileInput(_FilterParams):
+    path: str
+
+
+def read_support_file(
+    self,
+    path: str,
+    *,
+    match: str | None = None,
+    keys: list[str] | None = None,
+    head_lines: int | None = None,
+) -> dict[str, Any]:
+    normalized = _safe_relative_path(path)
+    if normalized not in self._support_files:
+        return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
+    content = filtered_view(self._support_files[normalized], match=match, keys=keys, head_lines=head_lines)
+    return {"ok": True, "path": normalized, "content": content}
+```
+
+Update the `read_support_file_tool` closure inside `as_agent_tools`:
+
+```python
+@tool("read_support_file", args_schema=_ReadSupportFileInput)
+def read_support_file_tool(
+    path: str,
+    match: str | None = None,
+    keys: list[str] | None = None,
+    head_lines: int | None = None,
+) -> dict[str, Any]:
+    """Read a support file with optional substring match, JSON key filter, or head-lines window."""
+    return self.read_support_file(path, match=match, keys=keys, head_lines=head_lines)
+```
+
+- [ ] **Step 4: Update logical author `read_constraint_file` closure**
+
+In `src/trace/stages/logical/nodes/author.py`:
+
+```python
+from trace.stages.support_files import _FilterParams, filtered_view
+
+
+class _ReadLogicalConstraintInput(_FilterParams):
+    path: str = DEFAULT_CONSTRAINT_PATH
+
+
+# inside as_agent_tools:
+@tool("read_constraint_file", args_schema=_ReadLogicalConstraintInput)
+def read_constraint_file_tool(
+    path: str = DEFAULT_CONSTRAINT_PATH,
+    match: str | None = None,
+    keys: list[str] | None = None,
+    head_lines: int | None = None,
+) -> dict[str, Any]:
+    """Read a logical constraint file with optional substring match, JSON key filter, or head-lines window."""
+    content = (self._state.get("support_files") or {}).get(path)
+    if content is None:
+        return {"ok": False, "error": {"message": f"support file not found: {path}"}}
+    return {"ok": True, "path": path, "content": filtered_view(content, match=match, keys=keys, head_lines=head_lines)}
+```
+
+- [ ] **Step 5: Update physical author `read_constraint_file` closure**
+
+Same pattern in `src/trace/stages/physical/nodes/author.py` using `_ReadPhysicalConstraintInput(_FilterParams)` with `path: str = DEFAULT_CONSTRAINT_PATH` (this DEFAULT_CONSTRAINT_PATH points to physical constraints).
+
+- [ ] **Step 6: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_filtered_read_tools.py -v`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py src/trace/stages/logical/nodes/author.py src/trace/stages/physical/nodes/author.py tests/unit/stages/test_filtered_read_tools.py
+git commit -m "feat(stages): add match/keys/head_lines filtering to read_*_file tools"
+```
+
+### Task 1.6: Add `list_support_files` agent tool
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py`
+- Modify: `tests/unit/stages/test_filtered_read_tools.py` (extend)
+
+- [ ] **Step 1: Write failing test for the new tool**
+
+Append to `tests/unit/stages/test_filtered_read_tools.py`:
+
+```python
+def test_list_support_files_returns_sorted_paths():
+    tools = StageRepairTools(
+        _seed_artifact(),
+        support_files={"logical/checkpoints.py": "", "ground/logical_constraints.json": "{}"},
+    )
+    assert tools.list_support_files() == {"paths": ["ground/logical_constraints.json", "logical/checkpoints.py"]}
+
+
+def test_list_support_files_exposed_as_agent_tool():
+    tools = StageRepairTools(_seed_artifact(), support_files={"logical/checkpoints.py": ""})
+    bound = {tool.name: tool for tool in tools.as_agent_tools()}
+    assert "list_support_files" in bound
+    result = bound["list_support_files"].invoke({})
+    assert "paths" in result
+```
+
+- [ ] **Step 2: Flip existing stage-repair `tool_names == [...]` assertion that will be broken by adding `list_support_files`**
+
+In `tests/unit/stages/logical/test_repair_node.py` L67-74, replace:
+
+```python
+assert client.calls[0]["tool_names"] == [
+    "inspect_graph",
+    "read_support_file",
+    "write_checkpoint_file",
+    "write_mutation_file",
+    "execute_mutation_file",
+    "validate_graph",
+]
+```
+
+with:
+
+```python
+tool_names = set(client.calls[0]["tool_names"])
+assert {"inspect_graph", "read_support_file", "write_checkpoint_file", "write_mutation_file", "execute_mutation_file", "validate_graph", "list_support_files"}.issubset(tool_names)
+assert "find_images" not in tool_names  # logical scope must not expose image tools
+assert "get_image" not in tool_names
+```
+
+(The same shape exists in `tests/unit/stages/physical/test_physical_builder_node.py` and `test_physical_repair_node.py` and is handled by Task 1.8 because it adds `find_images` / `get_image`; flip those there. This Step 2 only handles the logical-side file.)
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_filtered_read_tools.py tests/unit/stages/logical/test_repair_node.py -v`
+Expected: FAIL (method / tool not present; logical repair test now expects `list_support_files` which doesn't exist yet).
+
+- [ ] **Step 4: Implement `list_support_files` method and tool**
+
+Add to `StageRepairTools`:
+
+```python
+def list_support_files(self) -> dict[str, Any]:
+    return {"paths": sorted(self._support_files.keys())}
+```
+
+In `as_agent_tools(...)`:
+
+```python
+@tool("list_support_files")
+def list_support_files_tool() -> dict[str, Any]:
+    """List all support file paths currently accessible to the agent."""
+    return self.list_support_files()
+```
+
+Append `list_support_files_tool` to the returned `tools` list (before image tools added in Task 1.7).
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages -v`
+Expected: PASS (this broader scope catches the logical repair file plus the new filtered_read tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_filtered_read_tools.py tests/unit/stages/logical/test_repair_node.py
+git commit -m "feat(repair_tools): expose list_support_files as agent tool"
+```
+
+### Task 1.7: Wire `find_images` / `get_image` as physical-scoped agent tools
+
+**Files:**
+- Modify: `src/trace/stages/repair_tools.py` (add `include_image_tools` flag in `as_agent_tools(...)`; add `_FindImagesInput` / `_GetImageInput`)
+- Create test: `tests/unit/stages/test_image_tools.py`
+- Create test: `tests/unit/stages/test_image_tools_logical_scope.py`
+
+- [ ] **Step 1: Write failing tests for physical-scope opt-in**
+
+`tests/unit/stages/test_image_tools.py`:
+
+```python
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed_physical_artifact():
+    return {
+        "graph": {
+            "stage": "physical",
+            "nodes": [
+                {"id": "FIREWALL", "type": "computer", "label": "FIREWALL", "ports": [], "image": None, "flavor": None}
+            ],
+            "links": [],
+        },
+        "constraint_files": {},
+        "checkpoint_files": {},
+    }
+
+
+def test_find_images_filters_by_role_when_opt_in():
+    tools = StageRepairTools(_seed_physical_artifact()).as_agent_tools(include_image_tools=True)
+    bound = {t.name: t for t in tools}
+    result = bound["find_images"].invoke({"roles": ["firewall"]})
+    ids = [item["image"]["id"] for item in result["images"]]
+    assert "img_pfsense" in ids
+
+
+def test_get_image_returns_image_record_when_opt_in():
+    tools = StageRepairTools(_seed_physical_artifact()).as_agent_tools(include_image_tools=True)
+    bound = {t.name: t for t in tools}
+    result = bound["get_image"].invoke({"image_id": "img_pfsense"})
+    assert result["image"]["id"] == "img_pfsense"
+    assert result["default_flavor"]["vcpu"] == 2
+
+
+def test_get_image_unknown_id_returns_error_when_opt_in():
+    tools = StageRepairTools(_seed_physical_artifact()).as_agent_tools(include_image_tools=True)
+    bound = {t.name: t for t in tools}
+    result = bound["get_image"].invoke({"image_id": "img_nonexistent"})
+    assert result["ok"] is False
+    assert "unknown image" in result["error"]["message"].lower()
+```
+
+`tests/unit/stages/test_image_tools_logical_scope.py`:
+
+```python
+from trace.stages.repair_tools import StageRepairTools
+
+
+def _seed_logical_artifact():
+    return {
+        "graph": {"stage": "logical", "nodes": [{"id": "A", "type": "computer", "label": "A", "ports": []}], "links": []},
+        "constraint_files": {},
+        "checkpoint_files": {},
+    }
+
+
+def test_logical_scope_does_not_expose_image_tools_by_default():
+    tools = StageRepairTools(_seed_logical_artifact()).as_agent_tools()
+    names = {tool.name for tool in tools}
+    assert "find_images" not in names
+    assert "get_image" not in names
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_image_tools.py tests/unit/stages/test_image_tools_logical_scope.py -v`
+Expected: FAIL — flag not implemented; positive tests can't find tools.
+
+- [ ] **Step 3: Implement `include_image_tools` flag and image tools**
+
+In `repair_tools.py`:
+
+```python
+from trace.tools.images.catalog import find_images, get_image
+
+
+class _FindImagesInput(BaseModel):
+    query: str | None = None
+    roles: list[str] | None = None
+    node_type: str | None = None
+    limit: int = 10
+
+
+class _GetImageInput(BaseModel):
+    image_id: str
+```
+
+Modify `as_agent_tools` signature:
+
+```python
+def as_agent_tools(self, *, include_checkpoint_tool: bool = True, include_image_tools: bool = False) -> list[Any]:
+    # ... existing tool builders ...
+
+    tools = [
+        inspect_graph_tool,
+        read_support_file_tool,
+        write_mutation_file_tool,
+        execute_mutation_file_tool,
+        validate_graph_tool,
+        list_support_files_tool,
+    ]
+    if include_checkpoint_tool:
+        tools.insert(2, write_checkpoint_file_tool)
+    if include_image_tools:
+        @tool("find_images", args_schema=_FindImagesInput)
+        def find_images_tool(
+            query: str | None = None,
+            roles: list[str] | None = None,
+            node_type: str | None = None,
+            limit: int = 10,
+        ) -> dict[str, Any]:
+            """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
+            return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
+
+        @tool("get_image", args_schema=_GetImageInput)
+        def get_image_tool(image_id: str) -> dict[str, Any]:
+            """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
+            try:
+                return get_image(image_id)
+            except KeyError as exc:
+                return {"ok": False, "error": {"message": str(exc)}}
+
+        tools.extend([find_images_tool, get_image_tool])
+    return tools
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_image_tools.py tests/unit/stages/test_image_tools_logical_scope.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/repair_tools.py tests/unit/stages/test_image_tools.py tests/unit/stages/test_image_tools_logical_scope.py
+git commit -m "feat(repair_tools): add physical-scoped find_images and get_image tools"
+```
+
+### Task 1.8: Wire image tools into `PhysicalAuthorTools.as_agent_tools` and physical builder/repair callsites
+
+**Files:**
+- Modify: `src/trace/stages/physical/nodes/author.py` (extend `PhysicalAuthorTools.as_agent_tools` with image tools)
+- Modify: `src/trace/stages/physical/nodes/builder.py` (pass `include_image_tools=True` when constructing `StageRepairTools` agent tools)
+- Modify: `src/trace/stages/physical/nodes/repair.py` (pass `include_image_tools=True`)
+- Update tests:
+  - `tests/unit/stages/physical/test_physical_author_node.py` — assert `find_images` / `get_image` in `tool_names`
+  - `tests/unit/stages/physical/test_physical_builder_node.py` L84-91 — replace exact `tool_names == [...]` with set-based containment
+  - `tests/unit/stages/physical/test_physical_repair_node.py` L71-78 — same
+
+- [ ] **Step 1: Flip existing test assertions to set-based containment**
+
+In `tests/unit/stages/physical/test_physical_builder_node.py` L84-91, replace:
+
+```python
+assert client.calls[0]["tool_names"] == [
+    "inspect_graph",
+    "read_support_file",
+    "write_mutation_file",
+    "execute_mutation_file",
+    "validate_graph",
+]
+assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
+```
+
+with:
+
+```python
+tool_names = set(client.calls[0]["tool_names"])
+assert {"inspect_graph", "read_support_file", "write_mutation_file", "execute_mutation_file", "validate_graph", "list_support_files", "find_images", "get_image"}.issubset(tool_names)
+assert "write_checkpoint_file" not in tool_names
+```
+
+In `tests/unit/stages/physical/test_physical_repair_node.py` L71-78, replace:
+
+```python
+assert client.calls[0]["tool_names"] == [
+    "inspect_graph",
+    "read_support_file",
+    "write_checkpoint_file",
+    "write_mutation_file",
+    "execute_mutation_file",
+    "validate_graph",
+]
+```
+
+with:
+
+```python
+tool_names = set(client.calls[0]["tool_names"])
+assert {"inspect_graph", "read_support_file", "write_checkpoint_file", "write_mutation_file", "execute_mutation_file", "validate_graph", "list_support_files", "find_images", "get_image"}.issubset(tool_names)
+```
+
+Add a new test in `tests/unit/stages/physical/test_physical_author_node.py`:
+
+```python
+def test_physical_author_tool_names_include_image_tools():
+    state = _minimal_physical_author_state()  # use existing helper or inline
+    from trace.stages.physical.nodes.author import PhysicalAuthorTools
+    tools = PhysicalAuthorTools(state=state, physical_constraints=[]).as_agent_tools()
+    names = {tool.name for tool in tools}
+    assert "find_images" in names
+    assert "get_image" in names
+```
+
+If `_minimal_physical_author_state` does not exist, inline:
+
+```python
+def _minimal_physical_author_state():
+    return {"support_files": {"ground/physical_constraints.json": "{}"}}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/physical -v`
+Expected: FAIL — tool names don't yet include image tools.
+
+- [ ] **Step 3: Wire image tools in PhysicalAuthorTools**
+
+In `src/trace/stages/physical/nodes/author.py` extend `as_agent_tools`:
+
+```python
+from trace.stages.repair_tools import _FindImagesInput, _GetImageInput
+from trace.tools.images.catalog import find_images, get_image
+
+# inside as_agent_tools, after existing four tools:
+@tool("find_images", args_schema=_FindImagesInput)
+def find_images_tool(
+    query: str | None = None,
+    roles: list[str] | None = None,
+    node_type: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
+    return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
+
+
+@tool("get_image", args_schema=_GetImageInput)
+def get_image_tool(image_id: str) -> dict[str, Any]:
+    """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
+    try:
+        return get_image(image_id)
+    except KeyError as exc:
+        return {"ok": False, "error": {"message": str(exc)}}
+
+
+return [
+    write_checkpoint_file_tool,
+    remove_checkpoint_file_tool,
+    read_constraint_file_tool,
+    validate_checkpoint_file_tool,
+    find_images_tool,
+    get_image_tool,
+]
+```
+
+- [ ] **Step 4: Pass `include_image_tools=True` in physical builder and repair**
+
+In `src/trace/stages/physical/nodes/builder.py`, change:
+
+```python
+tools=tools.as_agent_tools(include_checkpoint_tool=False),
+```
+
+to:
+
+```python
+tools=tools.as_agent_tools(include_checkpoint_tool=False, include_image_tools=True),
+```
+
+In `src/trace/stages/physical/nodes/repair.py`, same flag added to the `repair_tools.as_agent_tools()` call.
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/physical -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/physical tests/unit/stages/physical
+git commit -m "feat(physical): wire find_images and get_image into author/builder/repair tool lists"
+```
+
+### Task 1.9: Remove `image_catalog` system injection (three physical sites) and update breaking tests
+
+**Files:**
+- Modify: `src/trace/stages/physical/nodes/author.py` (drop `image_catalog` key from `system_context_sections`; remove `image_catalog_prompt` import)
+- Modify: `src/trace/stages/physical/nodes/builder.py` (same)
+- Modify: `src/trace/stages/physical/nodes/repair.py` (drop the `image_catalog` system message in `_build_repair_messages`; remove the `image_catalog` parameter; remove `image_catalog_prompt` import)
+- Update tests:
+  - `tests/unit/stages/physical/test_physical_author_node.py` L42-43 — replace `[image_catalog]` / `img_pfsense` positive assertions with negative
+  - `tests/unit/stages/physical/test_physical_builder_node.py` L93-94 — same
+  - `tests/unit/stages/physical/test_physical_repair_node.py` L131-132 — replace `Image catalog for this repair round` positive with negative
+
+- [ ] **Step 1: Flip the six positive assertions to negative**
+
+In `tests/unit/stages/physical/test_physical_author_node.py` L42-43:
+
+```python
+assert "[image_catalog]" not in system_content
+assert "img_pfsense" not in system_content
+```
+
+In `tests/unit/stages/physical/test_physical_builder_node.py` L93-94:
+
+```python
+assert "[image_catalog]" not in system_content
+assert "img_pfsense" not in system_content
+```
+
+In `tests/unit/stages/physical/test_physical_repair_node.py` L131-132:
+
+```python
+assert "Image catalog for this repair round" not in messages[2]["content"] if len(messages) > 2 else True
+assert all("img_pfsense" not in msg.get("content", "") for msg in messages)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/physical -v`
+Expected: FAIL on these three files because image_catalog is still injected.
+
+- [ ] **Step 3: Drop `image_catalog` from author and builder**
+
+`physical/nodes/author.py`:
+- Remove `from trace.tools.images.catalog import image_catalog_prompt`.
+- Remove the `"image_catalog": image_catalog_prompt(),` entry from `system_context_sections`.
+
+`physical/nodes/builder.py`:
+- Same two removals.
+
+- [ ] **Step 4: Drop `image_catalog` from repair**
+
+`physical/nodes/repair.py`:
+- Remove `from trace.tools.images.catalog import image_catalog_prompt`.
+- Remove the `image_catalog=image_catalog_prompt(),` argument from the `_build_repair_messages(...)` call.
+- Update `_build_repair_messages` signature to drop `image_catalog: str` parameter.
+- Remove the `{"role": "system", "content": "Image catalog for this repair round:\n\n" + image_catalog},` system message.
+
+- [ ] **Step 5: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/stages/physical/nodes tests/unit/stages/physical
+git commit -m "refactor(physical): drop image_catalog system injection in favor of tool-based access"
+```
+
+### Task 1.10: Fix `segment` semantics in playbooks and docs
+
+**Files:**
+- Modify: `src/tgraph/agent/playbooks/authoring.md` — ADD a new "TGraph Check / Editor API" subsection that explicitly describes `check_interface` and `ensure_interface` with `segment` required.
+- Modify: `src/tgraph/agent/playbooks/capabilities.md` — at line 29 remove the `segment` token from the "unsupported IR fields" list.
+- Modify: `src/tgraph/agent/playbooks/repair.md` — add line: "When choosing images, use `find_images` / `get_image` agent tools. Do not recall `image_id` from memory."
+- Modify: `src/tgraph/agent/docs/tgraph_check_api.md` — update `check_interface` signature line and add a one-line parameter-vs-IR-field note.
+- Modify: `src/tgraph/agent/docs/tgraph_editor_api.md` — same for `ensure_interface`.
+- Create test: `tests/unit/tgraph/agent/test_playbook_segment.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/tgraph/agent/test_playbook_segment.py
+from tgraph.agent.protocol import playbook_paths, doc_paths
+
+
+def test_authoring_playbook_mentions_check_interface_and_marks_segment_required():
+    text = playbook_paths()["authoring"].read_text(encoding="utf-8")
+    assert "check_interface" in text
+    assert "ensure_interface" in text
+    para = next(p for p in text.split("\n\n") if "check_interface" in p or "ensure_interface" in p)
+    assert "required" in para.lower() or "must" in para.lower()
+
+
+def test_authoring_playbook_clarifies_segment_meaning():
+    text = playbook_paths()["authoring"].read_text(encoding="utf-8")
+    assert "neighboring" in text.lower() or "switch node id" in text.lower() or "not an IR field" in text.lower()
+
+
+def test_capabilities_playbook_no_longer_lists_segment_as_unsupported_ir_field():
+    text = playbook_paths()["capabilities"].read_text(encoding="utf-8")
+    # The `unsupported IR fields` enumeration must not include `segment`.
+    # We accept both bullet styles.
+    forbidden_line_fragments = [
+        "`software`, `packages`, `zone`, `segment`",
+        "`software`, `packages`, `segment`",
+        "`segment`, `firewall_rules`",
+    ]
+    for fragment in forbidden_line_fragments:
+        assert fragment not in text
+
+
+def test_repair_playbook_mentions_image_tools():
+    text = playbook_paths()["repair"].read_text(encoding="utf-8")
+    assert "find_images" in text
+    assert "get_image" in text
+
+
+def test_tgraph_check_api_doc_marks_segment_required():
+    text = doc_paths()["readme"].parent.joinpath("tgraph_check_api.md").read_text(encoding="utf-8")
+    assert "segment" in text
+    assert "required" in text.lower() or "must" in text.lower() or "parameter" in text.lower()
+
+
+def test_tgraph_editor_api_doc_marks_segment_required():
+    text = doc_paths()["readme"].parent.joinpath("tgraph_editor_api.md").read_text(encoding="utf-8")
+    assert "ensure_interface" in text
+    assert "segment" in text
+    assert "parameter" in text.lower() or "neighboring" in text.lower()
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/tgraph/agent/test_playbook_segment.py -v`
+Expected: FAIL on all assertions.
+
+- [ ] **Step 3: Update `playbooks/authoring.md` (ADD subsection)**
+
+Append to `src/tgraph/agent/playbooks/authoring.md`:
+
+```markdown
+
+## TGraph Check / Editor API (interface fact authoring)
+
+When the constraint is interface-shaped, use these APIs explicitly:
+
+- `tgraph.check_interface(node, segment=..., cidr=None, ip=None, link_key=None)`
+  - `segment` is **required**; it is the neighboring switch / segment-carrier node id (a function parameter that points to another node), not an IR field on nodes or ports.
+  - `cidr`, `ip`, and `link_key` are optional refinements.
+- `tgraph.ensure_interface(node, segment=..., cidr=..., ip=None, link_key=None)`
+  - Same `segment` semantics. The mutation creates or updates the interface port.
+
+`segment` always identifies an existing node id. It is never a top-level IR field.
+```
+
+- [ ] **Step 4: Update `playbooks/capabilities.md` (REMOVE segment token)**
+
+In `src/tgraph/agent/playbooks/capabilities.md` line 29, change:
+
+```
+- represent unsupported IR fields such as `software`, `packages`, `zone`, `segment`, `firewall_rules`, or provider-specific deployment plans
+```
+
+to:
+
+```
+- represent unsupported IR fields such as `software`, `packages`, `zone`, `firewall_rules`, or provider-specific deployment plans (`segment` is a function parameter pointing to a neighboring node, not an IR field)
+```
+
+- [ ] **Step 5: Update `playbooks/repair.md` (ADD image-tools reminder)**
+
+Append a short section to `src/tgraph/agent/playbooks/repair.md`:
+
+```markdown
+
+## Image Selection
+
+When choosing images during physical-stage repair, use the `find_images` and `get_image` agent tools. Do not recall `image_id` from memory.
+```
+
+- [ ] **Step 6: Update docs**
+
+In `src/tgraph/agent/docs/tgraph_check_api.md`, change the `check_interface` line to:
+
+```
+tgraph.check_interface(node, segment=..., cidr=None, ip=None, link_key=None)  # segment is required: neighboring node id (parameter, not an IR field)
+```
+
+In `src/tgraph/agent/docs/tgraph_editor_api.md`, change the `ensure_interface` line similarly and add at bottom: "`segment` is always a function parameter referring to another node id — never an IR field."
+
+- [ ] **Step 7: Run tests to verify pass**
+
+Run: `pytest tests/unit/tgraph/agent/test_playbook_segment.py -v`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tgraph/agent tests/unit/tgraph/agent/test_playbook_segment.py
+git commit -m "docs(tgraph): mark segment a required parameter, not an IR field; add image-tools reminder"
+```
+
+### Task 1.11: Strip TGraph API listings from six agent-role prompts and add final-message constraint
+
+**Files:**
+- Modify (agent-role prompts only — ground prompts excluded):
+  - `src/trace/stages/logical/prompts/author.md`
+  - `src/trace/stages/logical/prompts/builder.md`
+  - `src/trace/stages/logical/prompts/repair.md`
+  - `src/trace/stages/physical/prompts/author.md`
+  - `src/trace/stages/physical/prompts/builder.md`
+  - `src/trace/stages/physical/prompts/repair.md`
+- Leave UNCHANGED:
+  - `src/trace/stages/ground/prompts/author.md` (structured role; "Return only a JSON object" contract)
+  - `src/trace/stages/ground/prompts/evaluator.md` (structured role)
+- Create test: `tests/unit/stages/test_prompts_surface.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_prompts_surface.py
+from pathlib import Path
+
+PROMPT_ROOT = Path(__file__).resolve().parents[3] / "src" / "trace" / "stages"
+AGENT_PROMPT_ROOTS = [
+    PROMPT_ROOT / "logical" / "prompts",
+    PROMPT_ROOT / "physical" / "prompts",
+]
+STRUCTURED_PROMPT_ROOTS = [PROMPT_ROOT / "ground" / "prompts"]
+
+
+def _agent_prompts() -> list[Path]:
+    return [p for root in AGENT_PROMPT_ROOTS for p in root.glob("*.md")]
+
+
+def _structured_prompts() -> list[Path]:
+    return [p for root in STRUCTURED_PROMPT_ROOTS for p in root.glob("*.md")]
+
+
+def test_no_tgraph_api_listings_in_agent_prompts():
+    forbidden = (
+        "tgraph.check_subnet",
+        "tgraph.check_interface",
+        "tgraph.check_direct_link",
+        "tgraph.check_chain",
+        "tgraph.check_ring",
+        "tgraph.check_star",
+        "tgraph.check_mesh",
+        "tgraph.check_image_exact",
+        "tgraph.check_flavor_minimum",
+        "tgraph.check_flavor_exact",
+        "tgraph.ensure_direct_link",
+        "tgraph.ensure_chain",
+        "tgraph.ensure_ring",
+        "tgraph.ensure_star",
+        "tgraph.ensure_mesh",
+        "tgraph.ensure_subnet",
+        "tgraph.ensure_interface",
+        "tgraph.set_image",
+        "tgraph.set_flavor",
+    )
+    for path in _agent_prompts():
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            # Allow physical/author.md to reference tgraph.check_* INSIDE the kind→tool decision table only
+            if path.name == "author.md" and "Kind→Tool" in text and token in {"tgraph.check_image_exact", "tgraph.check_flavor_exact", "tgraph.check_flavor_minimum"}:
+                continue
+            assert token not in text, f"{path} still mentions {token}"
+
+
+def test_agent_prompts_end_with_final_message_constraint():
+    for path in _agent_prompts():
+        text = path.read_text(encoding="utf-8")
+        assert "Final message MUST be a one-sentence action summary" in text, f"{path.name} missing constraint"
+
+
+def test_structured_prompts_do_not_carry_final_message_constraint():
+    # Final-message constraint would contradict "Return only a JSON object" in ground prompts.
+    for path in _structured_prompts():
+        text = path.read_text(encoding="utf-8")
+        assert "Final message MUST be a one-sentence action summary" not in text
+
+
+def test_physical_author_prompt_has_kind_tool_decision_table():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "author.md").read_text(encoding="utf-8")
+    assert "Kind" in text and "tgraph.check_image_exact" in text
+    assert "physical.image.exact" in text
+    assert "physical.image.capability" in text
+
+
+def test_logical_builder_prompt_does_not_forbid_segment_keyword():
+    text = (PROMPT_ROOT / "logical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "Do not invent unsupported IR fields such as `segment`" not in text
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -v`
+Expected: FAIL on multiple assertions.
+
+- [ ] **Step 3: Edit six agent prompts**
+
+For each agent prompt:
+
+a. Delete entire `## TGraph Check API`, `## TGraph Editor API`, `## Mutation Contract`, `## Available Tools` API-list-style blocks. Keep role guidance, tool-flow narrative, examples that reference tools but not API surface lists.
+
+b. Specifically:
+
+  - `logical/prompts/author.md` — delete `## TGraph Check API` section (8 `tgraph.check_*` lines) AND delete the `## Example` block at L47-52 (contains `tgraph.check_chain`). The custom-issue guidance code block at L26-45 may remain because it only uses `tgraph.path_exists`, `tgraph.issue` style helpers (no `tgraph.check_*` / `tgraph.ensure_*` / `tgraph.set_*` tokens — verify with grep after editing).
+  - `logical/prompts/builder.md` — delete `## Mutation Contract` API list (the 7 `tgraph.ensure_*` lines), keep `def mutate(tgraph):` skeleton. Replace `"Do not invent unsupported IR fields such as 'segment', 'zone', 'firewall_rules', 'software', or 'packages'."` with: `"Do not invent unsupported IR fields such as 'zone', 'firewall_rules', 'software', or 'packages'. 'segment' is a parameter of ensure_interface pointing to a neighboring switch node id — pass an existing node id."`
+  - `logical/prompts/repair.md` — delete `## Available Tools` enumeration AND delete the `## Mutation Example` block at L20-25 (contains `tgraph.ensure_chain` / `tgraph.ensure_subnet`).
+  - `physical/prompts/author.md` — delete `## TGraph Check API`; the Kind→Tool table comes in Task 1.12.
+  - `physical/prompts/builder.md` — delete `## Mutation Contract` API list; the switch hint comes in Task 1.13.
+  - `physical/prompts/repair.md` — delete `## Available Tools` AND delete the `## Mutation Example` block at L21-26 (contains `tgraph.set_image` / `tgraph.set_flavor`); also rewrite L16 "Image and flavor choices must come from `image_catalog` or explicit static knowledge supplied in context." to "Image and flavor choices must come from `find_images` / `get_image` agent tools or explicit static knowledge supplied in context."
+
+(All deleted code examples were API surface exposure; the spec mandates that API surface live exclusively in `tgraph_contract` / playbooks / docs.)
+
+c. Append to each of the six agent prompts (last line, plain text):
+
+```
+Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -v`
+Expected: PASS on `test_no_tgraph_api_listings_in_agent_prompts`, `test_agent_prompts_end_with_final_message_constraint`, `test_structured_prompts_do_not_carry_final_message_constraint`, `test_logical_builder_prompt_does_not_forbid_segment_keyword`. The kind→tool decision table test still FAILS (will pass after Task 1.12).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/logical/prompts src/trace/stages/physical/prompts tests/unit/stages/test_prompts_surface.py
+git commit -m "refactor(prompts): strip TGraph API listings from agent prompts; add final-message constraint"
+```
+
+### Task 1.12: Add physical author Kind→Tool decision table
+
+**Files:**
+- Modify: `src/trace/stages/physical/prompts/author.md`
+- The relevant test `test_physical_author_prompt_has_kind_tool_decision_table` is already in `tests/unit/stages/test_prompts_surface.py`.
+
+- [ ] **Step 1: Verify the test is currently failing**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py::test_physical_author_prompt_has_kind_tool_decision_table -v`
+Expected: FAIL.
+
+- [ ] **Step 2: Insert the decision table block**
+
+Append to `src/trace/stages/physical/prompts/author.md` (before the final-message constraint added in Task 1.11):
+
+```markdown
+
+## Kind→Tool Decision Table
+
+| constraint kind             | how to author check                                                                 |
+|-----------------------------|--------------------------------------------------------------------------------------|
+| physical.image.exact        | use `tgraph.check_image_exact(node, image_id)`                                       |
+| physical.image.capability   | custom check; first call `find_images(roles=..., query=...)` to enumerate candidate `image_ids`, then encode `expected_image_ids` in issue details |
+| physical.flavor.exact       | use `tgraph.check_flavor_exact(node, vcpu=..., ram=..., disk=...)`                   |
+| physical.flavor.minimum     | use `tgraph.check_flavor_minimum(node, vcpu=..., ram=..., disk=...)`                 |
+| physical.custom             | custom check; describe the rule in plain Python                                      |
+
+Non-`custom` and non-`capability` kinds must go through the matching `tgraph.check_*` API. Do not wrap them in hand-written if-else.
+```
+
+(Note: this is the **only** allowed appearance of `tgraph.check_image_exact` / `tgraph.check_flavor_*` in any prompt — the surface test in Task 1.11 explicitly whitelists this file for those tokens.)
+
+- [ ] **Step 3: Run test to verify pass**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py -v`
+Expected: PASS for all in this file.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/trace/stages/physical/prompts/author.md
+git commit -m "docs(physical_author): add kind-to-tool decision table"
+```
+
+### Task 1.13: Add physical builder switch-iteration hint
+
+**Files:**
+- Modify: `src/trace/stages/physical/prompts/builder.md`
+- Modify: `tests/unit/stages/test_prompts_surface.py` (add one assertion)
+
+- [ ] **Step 1: Write failing test**
+
+Append to `tests/unit/stages/test_prompts_surface.py`:
+
+```python
+def test_physical_builder_prompt_hints_switch_iteration():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "find_images(node_type='switch')" in text or 'find_images(node_type="switch")' in text
+    assert "do not skip" in text.lower() or "every switch" in text.lower()
+```
+
+- [ ] **Step 2: Run to verify fail**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py::test_physical_builder_prompt_hints_switch_iteration -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Append hint to builder prompt**
+
+Append to `src/trace/stages/physical/prompts/builder.md` (just before the final-message constraint added in Task 1.11):
+
+```markdown
+
+## Switch Coverage
+
+Use `find_images(node_type='switch')` to retrieve the switch image and default_flavor, then iterate every switch node when authoring mutation calls. Do not skip any switch node.
+```
+
+(This snippet uses bare `set_image` / `set_flavor` only in commentary if needed; the strict forbidden tokens in Task 1.11 are `tgraph.set_image` / `tgraph.set_flavor` with the `tgraph.` prefix, so bare verbs are fine.)
+
+- [ ] **Step 4: Run test to verify pass**
+
+Run: `pytest tests/unit/stages/test_prompts_surface.py::test_physical_builder_prompt_hints_switch_iteration -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/physical/prompts/builder.md tests/unit/stages/test_prompts_surface.py
+git commit -m "docs(physical_builder): hint find_images for full switch coverage"
+```
+
+### Task 1.14: Verify full test suite and demo smoke
+
+- [ ] **Step 1: Full unit suite**
+
+Run: `pytest -q`
+Expected: all green.
+
+- [ ] **Step 2: Demo smoke (LangSmith disabled to keep run fast/offline)**
+
+PowerShell:
+
+```powershell
+$env:LANGSMITH_TRACING="false"
+trace run tests/demo/demo.md --run-id pr1-smoke-001 --output-root runs
+```
+
+Expected:
+- `runs/pr1-smoke-001/run.json` `status` is `completed`.
+- `runs/pr1-smoke-001/logical/repair_history.json` first round does not list a `check_interface` segment error (the demo-007 regression).
+- `runs/pr1-smoke-001/physical/mutations/build.py` covers all image/flavor targets in a single mutation file (no `attempt_1.py` follow-up needed for switch image coverage).
+- LangSmith trace (if re-enabled) shows `find_images` and `get_image` tool calls inside physical agent runs.
+
+- [ ] **Step 3: Branch / PR**
+
+Push the chunk-1 branch and open a PR titled `feat: PR1 prompt and tool surface cleanup`. Reference the spec section list in the PR description.
+
+PR1 chunk done.
+
+---
+
+(Chunks 2 / 3 / 4 will be appended in subsequent revisions of this plan after Chunk 1 reviewer approves.)
