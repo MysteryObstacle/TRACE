@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -22,6 +24,7 @@ class MutationSummary(BaseModel):
     affected_node_ids: list[str]
     affected_link_ids: list[str]
     op_counts: dict[str, int]
+    snapshot_path: str | None = None
 
     @classmethod
     def from_operations(
@@ -31,6 +34,7 @@ class MutationSummary(BaseModel):
         node_count: int,
         link_count: int,
         operations: list[dict[str, Any]],
+        snapshot_path: str | None = None,
     ) -> MutationSummary:
         node_ids: set[str] = set()
         link_ids: set[str] = set()
@@ -59,6 +63,7 @@ class MutationSummary(BaseModel):
             affected_node_ids=sorted(node_ids),
             affected_link_ids=sorted(link_ids),
             op_counts=_derive_op_counts(operations),
+            snapshot_path=snapshot_path,
         )
 
 
@@ -113,6 +118,7 @@ class StageRepairTools:
         support_files: dict[str, str] | None = None,
         support_file_root: str | None = None,
         logical_reference_graph: TGraph | dict[str, Any] | None = None,
+        mutation_index_seed: int = 1,
     ) -> None:
         self._artifact = deepcopy(artifact)
         self._support_files = dict(support_files or {})
@@ -124,7 +130,7 @@ class StageRepairTools:
             if logical_reference_graph is not None
             else None
         )
-        self._mutation_index = 1
+        self._mutation_index = max(1, mutation_index_seed)
 
     def artifact_state(self) -> dict[str, Any]:
         return deepcopy(self._artifact)
@@ -271,12 +277,24 @@ class StageRepairTools:
         operations = list(result.operations or [])
         if result.ok and result.graph is not None:
             self._artifact["graph"] = result.graph.model_dump(mode="json")
+
+        snapshot_path: str | None = None
+        if result.ok and result.graph is not None:
+            attempt_id = self._attempt_id_for_mutation_path(normalized)
+            if attempt_id is not None:
+                snapshot_path = f"{result.graph.stage}/mutations/snapshots/attempt_{attempt_id}.json"
+                self._write_support_file(
+                    snapshot_path,
+                    json.dumps(result.graph.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                )
+
         graph_model = self._graph_model()
         summary = MutationSummary.from_operations(
             stage=graph_model.stage,
             node_count=len(graph_model.nodes),
             link_count=len(graph_model.links),
             operations=operations,
+            snapshot_path=snapshot_path,
         )
         payload: dict[str, Any] = {
             "ok": result.ok,
@@ -348,6 +366,12 @@ class StageRepairTools:
         path = f"{stage}/mutations/attempt_{self._mutation_index}.py"
         self._mutation_index += 1
         return path
+
+    def _attempt_id_for_mutation_path(self, path: str) -> int | None:
+        match = re.match(r"^[^/]+/mutations/attempt_(\d+)\.py$", path)
+        if not match:
+            return None
+        return int(match.group(1))
 
 
 def _safe_relative_path(relative_path: str) -> str:
