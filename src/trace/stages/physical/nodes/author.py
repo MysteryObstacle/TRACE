@@ -31,7 +31,6 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
         task="Author physical-stage checkpoint functions for the current logical graph.",
         context_sections={
-            "graph_summary": _graph_summary(state["logical_artifact"]["graph"]),
             "constraint_files": state.get("draft_artifact", {}).get("constraint_files", {})
             or ground_artifact.get("constraint_files", {"physical": DEFAULT_CONSTRAINT_PATH}),
         },
@@ -227,16 +226,6 @@ def _checkpoint_file_static_issues(
             }
         )
     return issues
-
-
-def _graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
-    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-    links = graph.get("links", []) if isinstance(graph, dict) else []
-    return {
-        "stage": graph.get("stage") if isinstance(graph, dict) else None,
-        "nodes": [{"id": node.get("id"), "type": node.get("type")} for node in nodes if isinstance(node, dict)],
-        "link_count": len(links),
-    }
 
 
 def _normalize_checkpoint_path(path: str) -> str:

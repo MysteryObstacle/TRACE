@@ -95,7 +95,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
     assert "[working_graph]" not in human_content
-    assert "[graph_summary]" in human_content
+    assert "[graph_summary]" not in human_content
     assert result["draft_artifact"]["graph"]["nodes"][0]["image"]["id"] == "img_openplc"
     assert result["draft_artifact"]["checkpoint_files"] == {"physical": "physical/checkpoints.py"}
     assert result["draft_artifact"]["constraint_files"] == {"physical": "physical/constraints.json"}

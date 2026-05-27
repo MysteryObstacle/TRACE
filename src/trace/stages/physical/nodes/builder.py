@@ -31,7 +31,6 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
         context_sections={
             "constraint_files": artifact.get("constraint_files", {}),
             "checkpoint_files": artifact.get("checkpoint_files", {}),
-            "graph_summary": _graph_summary(artifact.get("graph", {})),
         },
         system_context_sections={
             "tgraph_contract": load_tgraph_contract_for("physical_builder"),
@@ -49,16 +48,6 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
     state["messages"] = _extract_messages(agent_result) or messages
     state["events"] = [*state.get("events", []), {"type": "physical.builder.completed", "attempt": state["attempt"]}]
     return state
-
-
-def _graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
-    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-    links = graph.get("links", []) if isinstance(graph, dict) else []
-    return {
-        "stage": graph.get("stage") if isinstance(graph, dict) else None,
-        "nodes": [{"id": node.get("id"), "type": node.get("type")} for node in nodes if isinstance(node, dict)],
-        "link_count": len(links),
-    }
 
 
 def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:
