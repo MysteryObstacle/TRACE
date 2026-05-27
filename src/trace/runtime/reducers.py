@@ -15,7 +15,6 @@ def merge_run_state(current: dict[str, Any], update: dict[str, Any]) -> dict[str
     merged["attempt_counters"] = _merge_dict(merged.get("attempt_counters", {}), update.get("attempt_counters", {}))
     merged["stage_reports"] = _merge_dict(merged.get("stage_reports", {}), update.get("stage_reports", {}))
     merged["support_files"] = _merge_dict(merged.get("support_files", {}), update.get("support_files", {}))
-    merged["events"] = [*merged.get("events", []), *deepcopy(update.get("events", []))]
     return merged
 
 
