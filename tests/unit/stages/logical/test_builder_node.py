@@ -1,151 +1,138 @@
 from trace.stages.logical.nodes.builder import builder_node
-from trace.tools.tgraph.derive import build_logical_skeleton
 
 
-def test_logical_builder_passes_node_only_skeleton_and_uses_model_topology():
+def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context(tmp_path) -> None:
     state = {
         "ground_artifact": {
             "node_groups": [
-                {"type": "computer", "members": ["PLC1", "PLC2"]},
+                {"type": "computer", "members": ["PLC1"]},
                 {"type": "switch", "members": ["SW1"]},
-                {"type": "router", "members": ["R1"]},
             ],
             "logical_constraints": [
-                {"id": "lc1", "statement": "PLC1 must connect to SW1."},
-                {"id": "lc2", "statement": "PLC2 must connect to SW1."},
-                {"id": "lc3", "statement": "SW1 must connect to R1."},
+                {"id": "lc1", "kind": "logical.topology.direct", "statement": "PLC1 directly connects to SW1."}
             ],
             "physical_constraints": [],
         },
+        "draft_artifact": {
+            "graph": {
+                "stage": "logical",
+                "nodes": [
+                    {"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []},
+                    {"id": "SW1", "type": "switch", "label": "SW1", "ports": []},
+                ],
+                "links": [],
+            },
+            "constraint_files": {"logical": "logical/constraints.json"},
+            "checkpoint_files": {},
+        },
+        "support_files": {
+            "logical/constraints.json": (
+                '{"lc1": {"kind": "logical.topology.direct", "statement": "PLC1 directly connects to SW1."}}'
+            )
+        },
+        "support_file_root": str(tmp_path),
+        "author_output": {"checkpoint_files": {"logical": "logical/checkpoints.py"}},
         "attempt": 1,
-        "working_graph": build_logical_skeleton(
-            [
-                {"id": "PLC1", "type": "computer", "label": "PLC1"},
-                {"id": "PLC2", "type": "computer", "label": "PLC2"},
-                {"id": "SW1", "type": "switch", "label": "SW1"},
-                {"id": "R1", "type": "router", "label": "R1"},
-            ]
-        ),
-        "author_output": {"logical_checkpoints": [], "logical_validator_script": None},
+        "events": [],
     }
+    state["support_files"]["logical/checkpoints.py"] = (
+        "def check_lc1(tgraph):\n"
+        "    return tgraph.check_direct_link('PLC1', 'SW1')\n"
+    )
 
     class FakeRoleClient:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = []
 
-        def invoke_structured(self, *, role_name, messages, schema):
-            self.calls.append({"role_name": role_name, "messages": messages})
-            return {
-                "tgraph_logical": {
-                    "profile": "logical.v1",
-                    "nodes": [
-                        {
-                            "id": "PLC1",
-                            "type": "computer",
-                            "label": "PLC1",
-                            "ports": [{"id": "PLC1_p0", "ip": "192.168.1.11", "cidr": "192.168.1.0/24"}],
-                            "image": None,
-                            "flavor": None,
-                        },
-                        {
-                            "id": "SW1",
-                            "type": "switch",
-                            "label": "SW1",
-                            "ports": [
-                                {"id": "SW1_p0", "ip": "", "cidr": "192.168.1.0/24"},
-                                {"id": "SW1_p1", "ip": "", "cidr": "192.168.1.0/24"},
-                                {"id": "SW1_p2", "ip": "", "cidr": "192.168.1.0/24"},
-                            ],
-                            "image": None,
-                            "flavor": None,
-                        },
-                        {
-                            "id": "PLC2",
-                            "type": "computer",
-                            "label": "PLC2",
-                            "ports": [{"id": "PLC2_p0", "ip": "192.168.1.12", "cidr": "192.168.1.0/24"}],
-                            "image": None,
-                            "flavor": None,
-                        },
-                        {
-                            "id": "R1",
-                            "type": "router",
-                            "label": "R1",
-                            "ports": [{"id": "R1_p0", "ip": "192.168.1.1", "cidr": "192.168.1.0/24"}],
-                            "image": None,
-                            "flavor": None,
-                        },
-                    ],
-                    "links": [
-                        {"id": "PLC1_p0--SW1_p0", "from_port": "PLC1_p0", "to_port": "SW1_p0"},
-                        {"id": "PLC2_p0--SW1_p1", "from_port": "PLC2_p0", "to_port": "SW1_p1"},
-                        {"id": "R1_p0--SW1_p2", "from_port": "R1_p0", "to_port": "SW1_p2"},
-                    ],
+        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+            self.calls.append(
+                {
+                    "role_name": role_name,
+                    "messages": messages,
+                    "tool_names": [_tool_name(tool) for tool in tools],
+                    "max_tool_calls": max_tool_calls,
+                }
+            )
+            bound = {_tool_name(tool): tool for tool in tools}
+            _call_tool(
+                bound["write_mutation_file"],
+                {
+                    "path": "logical/mutations/build.py",
+                    "content": "def mutate(tgraph):\n    tgraph.ensure_direct_link('PLC1', 'SW1')\n",
                 },
-            }
+            )
+            _call_tool(bound["execute_mutation_file"], {"path": "logical/mutations/build.py", "validate": True})
+            return {"messages": [{"role": "assistant", "content": "logical build complete"}]}
 
     client = FakeRoleClient()
     result = builder_node(state, client)
-    graph = result["draft_artifact"]["tgraph_logical"]
-    node_ids = sorted(node["id"] for node in graph["nodes"])
+    graph = result["draft_artifact"]["graph"]
     messages = client.calls[0]["messages"]
-    system_content = messages[1]["content"]
-    human_content = messages[2]["content"]
+    human_content = "\n".join(item["content"] for item in messages if item["role"] == "human")
 
-    assert node_ids == ["PLC1", "PLC2", "R1", "SW1"]
-    assert len(graph["links"]) == 3
-    assert "[logical_constraints]" in human_content
-    assert messages[1]["role"] == "system"
-    assert "[tgraph_contract]" in system_content
-    assert "[tgraph_contract]" not in human_content
-    assert "[builder_mode]" not in human_content
-    assert result["working_graph"]["links"] == []
-    assert sum(len(node["ports"]) for node in result["working_graph"]["nodes"]) == 0
+    assert client.calls[0]["role_name"] == "logical_builder"
+    assert client.calls[0]["tool_names"] == [
+        "inspect_graph",
+        "read_support_file",
+        "write_mutation_file",
+        "execute_mutation_file",
+        "validate_graph",
+    ]
+    assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
+    assert graph["links"][0]["id"] == "PLC1-SW1-1"
+    assert "logical/mutations/build.py" in result["support_files"]
+    assert result["draft_artifact"]["checkpoint_files"] == {"logical": "logical/checkpoints.py"}
+    assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
+    assert "working_graph" not in result
+    assert "[working_graph]" not in human_content
+    assert "[graph_summary]" in human_content
     assert result["events"][-1] == {"type": "logical.builder.completed", "attempt": 1}
 
 
-def test_logical_builder_omits_builder_mode_and_keeps_model_output():
+def test_logical_builder_keeps_seed_graph_when_agent_does_not_execute_mutation(tmp_path) -> None:
     state = {
         "ground_artifact": {"node_groups": [], "logical_constraints": [], "physical_constraints": []},
-        "attempt": 1,
-        "working_graph": build_logical_skeleton(
-            [
-                {"id": "n1", "type": "router", "label": "n1"},
-                {"id": "n2", "type": "router", "label": "n2"},
-            ]
-        ),
-        "author_output": {
-            "logical_checkpoints": [{"id": "cp1", "func": "path_exists", "description": "intent", "constraint_ids": [], "args": {"source_id": "n1", "target_id": "n2"}}],
-            "logical_validator_script": None,
+        "draft_artifact": {
+            "graph": {
+                "stage": "logical",
+                "nodes": [
+                    {"id": "N1", "type": "router", "label": "N1", "ports": []},
+                    {"id": "N2", "type": "router", "label": "N2", "ports": []},
+                ],
+                "links": [],
+            },
+            "constraint_files": {"logical": "logical/constraints.json"},
+            "checkpoint_files": {},
         },
+        "support_files": {"logical/constraints.json": "{}"},
+        "support_file_root": str(tmp_path),
+        "author_output": {"checkpoint_files": {}},
+        "attempt": 1,
+        "events": [],
     }
 
     class FakeRoleClient:
-        def __init__(self):
-            self.calls = []
+        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+            return {"messages": [{"role": "assistant", "content": "no mutation needed"}]}
 
-        def invoke_structured(self, *, role_name, messages, schema):
-            self.calls.append({"role_name": role_name, "messages": messages})
-            return {
-                "tgraph_logical": {
-                    "profile": "logical.v1",
-                    "nodes": [
-                        {"id": "n1", "type": "router", "label": "n1", "ports": [{"id": "n1:p1", "ip": "10.0.0.1", "cidr": "10.0.0.0/30"}], "image": None, "flavor": None},
-                        {"id": "n2", "type": "router", "label": "n2", "ports": [{"id": "n2:p1", "ip": "10.0.0.2", "cidr": "10.0.0.0/30"}], "image": None, "flavor": None},
-                    ],
-                    "links": [{"id": "n1:p1--n2:p1", "from_port": "n1:p1", "to_port": "n2:p1"}],
-                },
-            }
+    result = builder_node(state, FakeRoleClient())
 
-    client = FakeRoleClient()
-    result = builder_node(state, client)
-    graph = result["draft_artifact"]["tgraph_logical"]
-    messages = client.calls[0]["messages"]
-    system_content = messages[1]["content"]
-    human_content = messages[2]["content"]
+    assert result["draft_artifact"]["graph"]["links"] == []
+    assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
+    assert "checkpoints" not in result["draft_artifact"]
+    assert "validator_script" not in result["draft_artifact"]
 
-    assert len(graph["links"]) == 1
-    assert messages[1]["role"] == "system"
-    assert "[tgraph_contract]" in system_content
-    assert "[tgraph_contract]" not in human_content
-    assert "[builder_mode]" not in human_content
+
+def _tool_name(tool) -> str:
+    return getattr(tool, "name", getattr(tool, "__name__", type(tool).__name__))
+
+
+def _call_tool(tool, payload=None):
+    invoke = getattr(tool, "invoke", None)
+    if callable(invoke):
+        if payload is None:
+            return invoke({})
+        return invoke(payload)
+    if payload is None:
+        return tool()
+    return tool(**payload)

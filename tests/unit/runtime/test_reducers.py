@@ -9,7 +9,13 @@ def test_merge_run_state_appends_events_without_shared_memory():
         "stage_reports": {"ground": {"attempts_used": 1}},
     }
     update = {
-        "artifacts": {"logical": {"logical_checkpoints": []}},
+        "artifacts": {
+            "logical": {
+                "graph": {"stage": "logical", "nodes": [], "links": []},
+                "constraint_files": {"logical": "logical/constraints.json"},
+                "checkpoint_files": {"logical": "logical/checkpoints.py"},
+            }
+        },
         "events": [{"type": "stage.completed", "stage": "logical"}],
         "attempt_counters": {"logical": 2},
         "stage_reports": {"logical": {"attempts_used": 2}},
@@ -22,3 +28,5 @@ def test_merge_run_state_appends_events_without_shared_memory():
     assert merged["events"][-1]["type"] == "stage.completed"
     assert merged["attempt_counters"]["logical"] == 2
     assert merged["stage_reports"]["logical"]["attempts_used"] == 2
+    assert "tgraph_logical" not in merged["artifacts"]["logical"]
+    assert "checkpoints" not in merged["artifacts"]["logical"]

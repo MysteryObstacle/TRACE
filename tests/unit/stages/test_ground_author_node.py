@@ -37,11 +37,9 @@ def test_ground_author_initial_draft_mode_is_injected_by_node():
     human = _human_content(call)
     assert call["role_name"] == "ground_author"
     assert call["schema"] is GroundDraftArtifact
-    assert "当前任务模式：`initial_draft`" in human
+    assert "Current task mode: `initial_draft`" in human
     assert "[author_mode]\ninitial_draft" in human
     assert "[intent]\nBuild a network with HOST1." in human
-    assert "开放式 archetype 中由 author 主动引入的 functional role nodes" in human
-    assert "physical_constraints 只能来自 intent 中显式" not in human
     assert "feedback_revision" not in human
     assert "evaluation_feedback" not in human
     assert "previous_artifact" not in human
@@ -56,13 +54,13 @@ def test_ground_author_feedback_revision_mode_is_injected_by_node():
     }
     evaluation_report = {
         "passed": False,
-        "issues": [{"code": "missing_switch", "message": "SW1 is missing"}],
-        "optimizer_brief": {
-            "node_groups": [{"type": "switch", "members": ["SW1"]}],
-            "logical_constraints": [],
-            "physical_constraints": [],
-            "notes": [],
-        },
+        "issues": [
+            {
+                "message": "SW1 is missing",
+                "details": {"issue_kind": "ground.semantic.missing_node"},
+            }
+        ],
+        "notes": ["add SW1 to node_groups"],
     }
 
     author_node(
@@ -79,9 +77,11 @@ def test_ground_author_feedback_revision_mode_is_injected_by_node():
     )
 
     human = _human_content(client.calls[0])
-    assert "当前任务模式：`feedback_revision`" in human
+    assert "Current task mode: `feedback_revision`" in human
     assert "[author_mode]\nfeedback_revision" in human
     assert "[evaluation_feedback]" in human
+    assert "[evaluation_issues]" in human
+    assert "[evaluation_notes]" in human
     assert "[previous_artifact]" in human
-    assert "禁止输出 delta patch" in human
+    assert "not a delta patch" in human
     assert "initial_draft" not in human

@@ -8,7 +8,6 @@ AGENT_ROOT = Path("src/tgraph/agent")
 def test_agent_schema_files_exist_and_describe_required_contracts():
     expected = {
         "tgraph.schema.json": {"stage", "nodes", "links"},
-        "patch.schema.json": {"graph_patch"},
         "validation-report.schema.json": {"ok", "issues"},
         "inspect-result.schema.json": set(),
     }
@@ -20,6 +19,8 @@ def test_agent_schema_files_exist_and_describe_required_contracts():
         assert schema["type"] == "object"
         assert required.issubset(set(schema.get("required", [])))
 
+    assert not (AGENT_ROOT / "schemas" / "patch.schema.json").exists()
+
 
 def test_agent_playbooks_keep_workflow_and_knowledge_outside_tgraph():
     for name in ("repair.md", "authoring.md", "validation.md", "emission.md"):
@@ -27,7 +28,7 @@ def test_agent_playbooks_keep_workflow_and_knowledge_outside_tgraph():
         lowered = text.lower()
 
         assert "inspect" in lowered
-        assert "patch" in lowered or name == "emission.md"
+        assert "mutation" in lowered or name == "emission.md"
         assert "validate" in lowered
         assert "do not invent" in lowered
         assert "knowledge" in lowered
@@ -36,10 +37,20 @@ def test_agent_playbooks_keep_workflow_and_knowledge_outside_tgraph():
 
 
 def test_protocol_module_exports_schema_locations():
-    from tgraph.agent.protocol import schema_paths
+    from tgraph.agent.protocol import doc_paths, playbook_paths, schema_paths
 
     paths = schema_paths()
 
     assert "tgraph" in paths
     assert paths["tgraph"].name == "tgraph.schema.json"
+    assert "patch" not in paths
 
+    playbooks = playbook_paths()
+
+    assert "capabilities" in playbooks
+    assert playbooks["capabilities"].name == "capabilities.md"
+
+    docs = doc_paths()
+
+    assert "fact_kinds" in docs
+    assert docs["fact_kinds"].name == "fact-kinds.md"

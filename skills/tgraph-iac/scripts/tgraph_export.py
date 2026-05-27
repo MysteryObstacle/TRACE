@@ -3,9 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
 
-from trace_backend import BackendResolutionError, add_trace_backend_args, print_json, resolve_trace_backend
+from trace_backend import BackendResolutionError, add_trace_backend_args, export_stage_artifact, print_json, resolve_trace_backend
 
 
 def main() -> None:
@@ -19,10 +18,9 @@ def main() -> None:
 
     try:
         resolve_trace_backend(args.trace_root, args.trace_python)
-        from trace.tools.tgraph.export import export_artifact
 
         artifact = _read_json(Path(args.artifact))
-        result = export_artifact(artifact, target=args.target, stage=args.stage)
+        result = export_stage_artifact(artifact, target=args.target, stage=args.stage)
         if result.get("ok") and args.out:
             out_dir = Path(args.out)
             written = []

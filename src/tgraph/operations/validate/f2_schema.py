@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from tgraph.core.graph import TGraph
-from tgraph.operations.validate.issues import ValidationIssue
+from tgraph.operations.validate.issues import ValidationIssue, validation_issue
 
 
 def f2_schema(raw: Any) -> list[ValidationIssue]:
@@ -13,11 +13,10 @@ def f2_schema(raw: Any) -> list[ValidationIssue]:
         TGraph.model_validate(raw)
     except ValidationError as exc:
         return [
-            ValidationIssue(
-                code="schema_validation_error",
-                message="TGraph document failed schema validation",
+            validation_issue(
+                "schema_validation_error",
+                "TGraph document failed schema validation",
                 details={"errors": exc.errors()},
             )
         ]
     return []
-

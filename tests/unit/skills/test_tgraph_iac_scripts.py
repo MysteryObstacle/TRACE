@@ -24,75 +24,16 @@ def _run_script(script_name: str, args: list[str], *, cwd: Path) -> subprocess.C
     )
 
 
-def _artifact() -> dict:
+def _artifact(stage: str = "logical") -> dict:
     return {
-        "tgraph_logical": {"profile": "logical.v1", "nodes": [], "links": []},
-        "logical_checkpoints": [],
-        "logical_validator_script": None,
+        "graph": {"stage": stage, "nodes": [], "links": []},
+        "constraint_files": {},
+        "checkpoint_files": {},
     }
 
 
-def test_apply_patch_script_writes_output_from_arbitrary_cwd(tmp_path):
-    artifact_path = tmp_path / "artifact.json"
-    patch_path = tmp_path / "patch.json"
-    out_path = tmp_path / "artifact.out.json"
-    _write_json(artifact_path, _artifact())
-    _write_json(
-        patch_path,
-        {
-            "graph_patch": [{"op": "ensure_node", "id": "R1", "type": "router", "label": "R1"}],
-            "options": {"stage": "logical", "validate": ["f1", "f2", "f3"]},
-        },
-    )
-
-    result = _run_script(
-        "tgraph_apply_patch.py",
-        ["--artifact", str(artifact_path), "--patch", str(patch_path), "--stage", "logical", "--out", str(out_path)],
-        cwd=tmp_path,
-    )
-
-    stdout = json.loads(result.stdout)
-    written = json.loads(out_path.read_text(encoding="utf-8"))
-    assert result.returncode == 0
-    assert stdout["ok"] is True
-    assert stdout["artifact"] is None
-    assert written["tgraph_logical"]["nodes"][0]["id"] == "R1"
-
-
-def test_apply_patch_script_dry_run_does_not_write_output(tmp_path):
-    artifact_path = tmp_path / "artifact.json"
-    patch_path = tmp_path / "patch.json"
-    out_path = tmp_path / "artifact.out.json"
-    _write_json(artifact_path, _artifact())
-    _write_json(
-        patch_path,
-        {
-            "graph_patch": [{"op": "ensure_node", "id": "R1", "type": "router", "label": "R1"}],
-            "options": {"stage": "logical", "validate": ["f1", "f2", "f3"]},
-        },
-    )
-
-    result = _run_script(
-        "tgraph_apply_patch.py",
-        [
-            "--artifact",
-            str(artifact_path),
-            "--patch",
-            str(patch_path),
-            "--stage",
-            "logical",
-            "--out",
-            str(out_path),
-            "--dry-run",
-        ],
-        cwd=tmp_path,
-    )
-
-    stdout = json.loads(result.stdout)
-    assert result.returncode == 0
-    assert stdout["ok"] is True
-    assert stdout["committed"] is False
-    assert not out_path.exists()
+def test_apply_patch_script_is_not_shipped():
+    assert not (SKILL_ROOT / "scripts" / "tgraph_apply_patch.py").exists()
 
 
 def test_validate_script_outputs_validation_report(tmp_path):
@@ -111,30 +52,87 @@ def test_validate_script_outputs_validation_report(tmp_path):
     assert stdout["issues"] == []
 
 
-def test_inspect_script_outputs_topology(tmp_path):
-    artifact_path = tmp_path / "artifact.json"
+def test_validate_physical_script_accepts_logical_reference_artifact(tmp_path):
+    logical_artifact_path = tmp_path / "logical.json"
+    physical_artifact_path = tmp_path / "physical.json"
     _write_json(
-        artifact_path,
+        logical_artifact_path,
         {
-            "tgraph_logical": {
-                "profile": "logical.v1",
-                "nodes": [{"id": "R1", "type": "router", "label": "R1", "ports": []}],
+            "graph": {
+                "stage": "logical",
+                "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}],
                 "links": [],
             },
-            "logical_checkpoints": [],
-            "logical_validator_script": None,
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+    )
+    _write_json(
+        physical_artifact_path,
+        {
+            "graph": {
+                "stage": "physical",
+                "nodes": [
+                    {
+                        "id": "PLC1",
+                        "type": "computer",
+                        "label": "PLC1",
+                        "ports": [],
+                        "image": {"id": "img_openplc", "name": "OpenPLC Runtime"},
+                        "flavor": {"vcpu": 1, "ram": 512, "disk": 4},
+                    }
+                ],
+                "links": [],
+            },
+            "constraint_files": {},
+            "checkpoint_files": {},
         },
     )
 
     result = _run_script(
-        "tgraph_inspect.py",
-        ["--artifact", str(artifact_path), "--stage", "logical", "--query", "topology"],
+        "tgraph_validate.py",
+        [
+            "--artifact",
+            str(physical_artifact_path),
+            "--stage",
+            "physical",
+            "--logical-artifact",
+            str(logical_artifact_path),
+            "--levels",
+            "f1,f2,f3,f4",
+        ],
         cwd=tmp_path,
     )
 
     stdout = json.loads(result.stdout)
     assert result.returncode == 0
-    assert stdout == {"nodes": ["R1"], "links": []}
+    assert stdout["ok"] is True
+
+
+def test_inspect_script_outputs_summary(tmp_path):
+    artifact_path = tmp_path / "artifact.json"
+    _write_json(
+        artifact_path,
+        {
+            "graph": {
+                "stage": "logical",
+                "nodes": [{"id": "R1", "type": "router", "label": "R1", "ports": []}],
+                "links": [],
+            },
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+    )
+
+    result = _run_script(
+        "tgraph_inspect.py",
+        ["--artifact", str(artifact_path), "--stage", "logical", "--query", "summary"],
+        cwd=tmp_path,
+    )
+
+    stdout = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert stdout == {"stage": "logical", "node_count": 1, "link_count": 0, "node_types": {"router": 1}}
 
 
 def test_export_script_writes_tgraph_json_file(tmp_path):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tempfile import TemporaryDirectory
+
 from langgraph.graph import END, StateGraph
 
 from trace.config.settings import TraceSettings
@@ -13,16 +15,25 @@ from trace.stages.logical.nodes.validator import validator_node
 from trace.stages.logical.state import LogicalState
 
 
-def run_logical_stage(*, ground_artifact: dict[str, Any], role_client, settings: TraceSettings) -> dict[str, Any]:
+def run_logical_stage(
+    *,
+    ground_artifact: dict[str, Any],
+    role_client,
+    settings: TraceSettings,
+    inherited_support_files: dict[str, str] | None = None,
+) -> dict[str, Any]:
     graph = _build_logical_graph(role_client=role_client, settings=settings)
-    initial: LogicalState = {
-        "ground_artifact": ground_artifact,
-        "attempt": 1,
-        "max_attempts": settings.roles["logical_repair"].max_attempts,
-        "repair_history": [],
-        "events": [],
-    }
-    final_state = graph.invoke(initial)
+    with TemporaryDirectory(prefix="trace-logical-") as support_root:
+        initial: LogicalState = {
+            "ground_artifact": ground_artifact,
+            "attempt": 1,
+            "max_attempts": settings.roles["logical_repair"].max_attempts,
+            "repair_history": [],
+            "events": [],
+            "support_files": dict(inherited_support_files or {}),
+            "support_file_root": support_root,
+        }
+        final_state = graph.invoke(initial)
     return require_stage_result(stage_id="logical", final_state=final_state)
 
 

@@ -6,7 +6,7 @@ from typing import Optional
 
 import typer
 
-from tgraph import apply_patch, dump_tgraph, emit_target, inspect_graph, load_tgraph, normalize_graph, validate_graph
+from tgraph import dump_tgraph, emit_target, inspect_graph, load_tgraph, normalize_graph, validate_graph
 from tgraph.operations.validate import ValidationPolicy
 
 app = typer.Typer(help="TGraph IR engine CLI")
@@ -37,21 +37,6 @@ def validate(
     graph = load_tgraph(graph_path)
     policy = ValidationPolicy(levels=[item.strip() for item in levels.split(",") if item.strip()], stage=stage)
     result = validate_graph(graph, policy)
-    _emit(result.model_dump(mode="json"), json_output=json_output)
-
-
-@app.command()
-def patch(
-    graph_path: Path,
-    patch_path: Path,
-    out: Optional[Path] = typer.Option(None, "--out"),
-    json_output: bool = typer.Option(False, "--json"),
-) -> None:
-    graph = load_tgraph(graph_path)
-    patch_payload = json.loads(patch_path.read_text(encoding="utf-8"))
-    result = apply_patch(graph, patch_payload, include_graph=True)
-    if out is not None and result.ok and result.graph is not None:
-        out.write_text(dump_tgraph(result.graph, as_json=True), encoding="utf-8")
     _emit(result.model_dump(mode="json"), json_output=json_output)
 
 
@@ -103,4 +88,3 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-

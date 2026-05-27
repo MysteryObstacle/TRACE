@@ -1,103 +1,39 @@
 from trace.stages.physical.nodes.validator import validator_node
 
 
-def test_physical_validator_executes_physical_checkpoints():
+def test_physical_validator_passes_logical_reference_graph_to_tgraph_validate() -> None:
     state = {
-        "author_output": {
-            "physical_checkpoints": [
-                {
-                    "id": "pc1",
-                    "func": "connect_nodes",
-                    "description": "PLC1 connect R1",
-                    "constraint_ids": ["p1"],
-                    "args": {"node_a": "PLC1", "node_b": "R1"},
-                }
-            ],
-            "physical_validator_script": None,
-        },
-        "draft_artifact": {
-            "physical_checkpoints": [
-                {
-                    "id": "pc1",
-                    "func": "connect_nodes",
-                    "description": "PLC1 connect R1",
-                    "constraint_ids": ["p1"],
-                    "args": {"node_a": "PLC1", "node_b": "R1"},
-                }
-            ],
-            "physical_validator_script": None,
-            "tgraph_physical": {
-                "profile": "taal.default.v1",
-                "nodes": [
-                    {
-                        "id": "PLC1",
-                        "type": "computer",
-                        "label": "PLC1",
-                        "ports": [],
-                        "image": {"id": "img1", "name": "OpenPLC"},
-                        "flavor": {"vcpu": 1, "ram": 512, "disk": 4},
-                    },
-                    {
-                        "id": "R1",
-                        "type": "router",
-                        "label": "R1",
-                        "ports": [],
-                        "image": None,
-                        "flavor": None,
-                    },
-                ],
+        "logical_artifact": {
+            "graph": {
+                "stage": "logical",
+                "nodes": [{"id": "R1", "type": "router", "label": "R1", "ports": []}],
                 "links": [],
             },
+            "checkpoint_files": {},
         },
-        "logical_artifact": {
-            "tgraph_logical": {
-                "profile": "logical.v1",
-                "nodes": [
-                    {"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []},
-                    {"id": "R1", "type": "router", "label": "R1", "ports": []},
-                ],
-                "links": [],
-            }
+        "draft_artifact": {
+            "graph": {"stage": "physical", "nodes": [], "links": []},
+            "constraint_files": {},
+            "checkpoint_files": {},
         },
         "attempt": 1,
         "max_attempts": 3,
+        "ground_artifact": {"physical_constraints": []},
     }
 
     result = validator_node(state)
 
     assert result["evaluation_report"]["ok"] is False
-    assert {item["code"] for item in result["evaluation_report"]["issues"]} >= {"missing_required_link"}
-    assert result["next_action"] == "repair"
-    assert "error" not in result
+    assert any(issue["details"]["issue_kind"] == "missing_preserved_node" for issue in result["evaluation_report"]["issues"])
 
 
-def test_physical_validator_fails_fast_on_authored_checkpoint_errors():
+def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None:
     state = {
-        "author_output": {
-            "physical_checkpoints": [
-                {
-                    "id": "pc1",
-                    "func": "broken_check",
-                    "description": "broken custom check",
-                    "constraint_ids": ["p1"],
-                    "args": {},
-                }
-            ],
-            "physical_validator_script": "def broken_check(tgraph, **kwargs):\n    raise KeyError('boom')\n",
-        },
         "draft_artifact": {
-            "physical_checkpoints": [
-                {
-                    "id": "pc1",
-                    "func": "broken_check",
-                    "description": "broken custom check",
-                    "constraint_ids": ["p1"],
-                    "args": {},
-                }
-            ],
-            "physical_validator_script": "def broken_check(tgraph, **kwargs):\n    raise KeyError('boom')\n",
-            "tgraph_physical": {
-                "profile": "taal.default.v1",
+            "constraint_files": {"physical": "physical/constraints.json"},
+            "checkpoint_files": {"physical": "physical/checkpoints.py"},
+            "graph": {
+                "stage": "physical",
                 "nodes": [
                     {
                         "id": "PLC1",
@@ -112,17 +48,28 @@ def test_physical_validator_fails_fast_on_authored_checkpoint_errors():
             },
         },
         "logical_artifact": {
-            "tgraph_logical": {
-                "profile": "logical.v1",
+            "graph": {
+                "stage": "logical",
                 "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}],
                 "links": [],
-            }
+            },
+            "checkpoint_files": {},
         },
+        "support_files": {
+            "physical/constraints.json": '{"pc1": {"kind": "physical.custom", "statement": "PLC1 custom physical fact."}}',
+            "physical/checkpoints.py": "def check_pc1(tgraph):\n    raise KeyError('boom')\n",
+        },
+        "support_file_root": str(tmp_path),
         "attempt": 1,
         "max_attempts": 3,
+        "ground_artifact": {
+            "physical_constraints": [
+                {"id": "pc1", "kind": "physical.custom", "statement": "PLC1 custom physical fact."}
+            ]
+        },
     }
 
     result = validator_node(state)
 
     assert result["next_action"] == "repair"
-    assert {item["code"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint_function_runtime_error"}
+    assert {item["details"]["issue_kind"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint.execution.exception"}

@@ -1,23 +1,23 @@
 from __future__ import annotations
 
+from tgraph import TGraph, validate_graph
+from tgraph.operations.validate import ValidationContext
+
 from trace.stages.logical.state import LogicalState
-from trace.tools.tgraph.runtime import TGraphRuntime
-from trace.tools.tgraph.validate import run_default_validators
+from trace.stages.support_files import support_file_path
 
 
 def validator_node(state: LogicalState) -> LogicalState:
-    authored_checkpoints = state.get("draft_artifact", {}).get("logical_checkpoints")
-    if authored_checkpoints is None:
-        authored_checkpoints = state.get("author_output", {}).get("logical_checkpoints", [])
-    authored_script = state.get("draft_artifact", {}).get("logical_validator_script")
-    if authored_script is None:
-        authored_script = state.get("author_output", {}).get("logical_validator_script")
+    draft = state.get("draft_artifact", {})
+    constraint_files = _resolve_support_paths(state, draft.get("constraint_files", {}))
+    checkpoint_files = _resolve_support_paths(state, draft.get("checkpoint_files", {}))
 
-    report = run_default_validators(
-        TGraphRuntime.from_json(state["draft_artifact"]["tgraph_logical"]).to_json(),
-        logical_constraints=state.get("ground_artifact", {}).get("logical_constraints", []),
-        logical_checkpoints=authored_checkpoints,
-        logical_validator_script=authored_script,
+    report = validate_graph(
+        TGraph.model_validate(state["draft_artifact"]["graph"]),
+        context=ValidationContext(
+            constraint_files=constraint_files,
+            checkpoint_files=checkpoint_files,
+        ),
     ).model_dump(mode="json")
     state["evaluation_report"] = report
     if report["ok"]:
@@ -29,3 +29,7 @@ def validator_node(state: LogicalState) -> LogicalState:
         return state
     state["next_action"] = "repair"
     return state
+
+
+def _resolve_support_paths(state: LogicalState, refs: dict[str, str]) -> dict[str, str]:
+    return {scope: str(support_file_path(state, path)) for scope, path in (refs or {}).items()}

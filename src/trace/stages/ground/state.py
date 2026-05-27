@@ -14,6 +14,8 @@ class GroundState(TypedDict, total=False):
     messages: list[dict[str, str]]
     retry_history: list[dict[str, Any]]
     events: list[dict[str, Any]]
+    support_files: dict[str, str]
+    support_file_root: str
     result: dict[str, Any]
     next_action: str
     error: dict[str, Any] | None

@@ -15,7 +15,11 @@ def test_run_storage_writes_debug_friendly_layout(tmp_path):
     storage.write_stage_snapshot(
         run_id="run-001",
         stage_id="logical",
-        artifact={"logical_checkpoints": [], "tgraph_logical": {"profile": "logical.v1", "nodes": [], "links": []}},
+        artifact={
+            "graph": {"stage": "logical", "nodes": [], "links": []},
+            "constraint_files": {"logical": "logical/constraints.json"},
+            "checkpoint_files": {"logical": "logical/checkpoints.py"},
+        },
         evaluation={"ok": True, "issues": []},
         summary={"attempts_used": 1},
         messages=[{"role": "human", "content": "hello"}],
@@ -23,6 +27,7 @@ def test_run_storage_writes_debug_friendly_layout(tmp_path):
         history_name="repair_history",
         history_entries=[{"round": 1, "action": "none"}],
         events=[{"type": "stage.completed"}],
+        support_files={"logical/checkpoints.py": "def check_lc1(tgraph):\n    return []\n"},
     )
 
     run_root = tmp_path / "runs" / "run-001"
@@ -37,7 +42,9 @@ def test_run_storage_writes_debug_friendly_layout(tmp_path):
     assert (run_root / "logical" / "events.jsonl").exists()
 
     payload = json.loads((run_root / "logical" / "artifact.json").read_text(encoding="utf-8"))
-    assert payload["tgraph_logical"]["profile"] == "logical.v1"
+    assert payload["graph"]["stage"] == "logical"
+    assert payload["checkpoint_files"] == {"logical": "logical/checkpoints.py"}
+    assert (run_root / "logical" / "checkpoints.py").read_text(encoding="utf-8").startswith("def check_lc1")
 
 
 def test_run_storage_serializes_langchain_messages(tmp_path):
@@ -47,7 +54,7 @@ def test_run_storage_serializes_langchain_messages(tmp_path):
     storage.write_stage_snapshot(
         run_id="run-002",
         stage_id="logical",
-        artifact={"tgraph_logical": {"profile": "logical.v1", "nodes": [], "links": []}},
+        artifact={"graph": {"stage": "logical", "nodes": [], "links": []}, "constraint_files": {}, "checkpoint_files": {}},
         evaluation={"ok": True, "issues": []},
         summary={"attempts_used": 1},
         messages=[SystemMessage(content="hello")],
@@ -82,3 +89,29 @@ def test_run_storage_writes_ground_retry_history_with_stage_specific_name(tmp_pa
     run_root = tmp_path / "runs" / "run-003"
     assert (run_root / "ground" / "retry_history.json").exists()
     assert not (run_root / "ground" / "repair_history.json").exists()
+
+
+def test_run_storage_reads_run_state_and_stage_artifacts(tmp_path):
+    storage = RunStorage(tmp_path / "runs")
+    storage.initialize_run(run_id="run-004", run_payload={"run_id": "run-004", "status": "completed"})
+    storage.write_stage_snapshot(
+        run_id="run-004",
+        stage_id="logical",
+        artifact={"graph": {"stage": "logical", "nodes": [], "links": []}, "constraint_files": {}, "checkpoint_files": {}},
+        evaluation={"ok": True, "issues": []},
+        summary={"attempts_used": 1},
+        messages=[],
+        tool_journal=[],
+        history_name="repair_history",
+        history_entries=[],
+        events=[],
+    )
+
+    assert storage.read_run_state("run-004") == {"run_id": "run-004", "status": "completed"}
+    assert storage.read_stage_artifact("run-004", "logical") == {
+        "graph": {"stage": "logical", "nodes": [], "links": []},
+        "constraint_files": {},
+        "checkpoint_files": {},
+    }
+    assert storage.stage_snapshot_exists("run-004", "logical")
+    assert not storage.stage_snapshot_exists("run-004", "physical")

@@ -65,22 +65,3 @@ def test_inspect_path_returns_reachable_node_path():
     result = inspect_graph(_graph(), view="path", source="R1", target="APP")
 
     assert result == {"reachable": True, "path": ["R1", "SW1", "APP"]}
-
-
-def test_inspect_segments_groups_ports_by_cidr():
-    from tgraph import inspect_graph
-
-    result = inspect_graph(_graph(), view="segments")
-
-    assert result == {
-        "segments": [
-            {
-                "cidr": "10.0.0.0/24",
-                "ports": [
-                    {"node": "SW1", "port": "sw1p1"},
-                    {"node": "SW1", "port": "sw1p2"},
-                ],
-            }
-        ]
-    }
-

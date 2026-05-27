@@ -1,38 +1,48 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from trace.stages.common import invoke_role
-from trace.stages.logical.schemas import LogicalArtifact
+from trace.stages.common import build_messages
 from trace.stages.logical.state import LogicalState
-from trace.tools.tgraph.prompting import load_tgraph_contract_for
-from trace.tools.tgraph.runtime import TGraphRuntime
+from trace.stages.prompt_contracts import load_tgraph_contract_for
+from trace.stages.repair_tools import StageRepairTools
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "builder.md"
+MAX_TOOL_CALLS = 24
 
 
 def builder_node(state: LogicalState, role_client) -> LogicalState:
-    messages, artifact = invoke_role(
-        role_client=role_client,
-        role_name="logical_builder",
-        system_prompt_path=PROMPT_PATH,
-        task="Build the logical TGraphJSON artifact using the provided logical constraints and skeleton.",
+    artifact = {
+        **state["draft_artifact"],
+        "checkpoint_files": state.get("author_output", {}).get("checkpoint_files", {}),
+    }
+    tools = StageRepairTools(
+        artifact,
+        support_files=state.get("support_files", {}),
+        support_file_root=state.get("support_file_root"),
+    )
+    messages = build_messages(
+        system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
+        task="Build the logical graph by writing and executing a mutation file.",
         context_sections={
-            "ground_artifact": state["ground_artifact"],
-            "working_graph": state["working_graph"],
-            "logical_constraints": state["ground_artifact"].get("logical_constraints", []),
+            "node_groups": state.get("ground_artifact", {}).get("node_groups", []),
+            "constraint_files": artifact.get("constraint_files", {}),
+            "checkpoint_files": artifact.get("checkpoint_files", {}),
+            "graph_summary": _graph_summary(artifact.get("graph", {})),
         },
         system_context_sections={"tgraph_contract": load_tgraph_contract_for("logical_builder")},
-        schema=LogicalArtifact,
     )
-    tgraph_logical = TGraphRuntime.from_json(artifact["tgraph_logical"]).to_json()
-    state["draft_artifact"] = {
-        "tgraph_logical": tgraph_logical,
-        "logical_checkpoints": state["author_output"].get("logical_checkpoints", []),
-        "logical_validator_script": state["author_output"].get("logical_validator_script"),
-    }
-    state["messages"] = messages
+    agent_result = role_client.invoke_agent(
+        role_name="logical_builder",
+        messages=messages,
+        tools=tools.as_agent_tools(include_checkpoint_tool=False),
+        max_tool_calls=MAX_TOOL_CALLS,
+    )
+    state["draft_artifact"] = tools.artifact_state()
+    state["support_files"] = tools.support_files()
+    state["messages"] = _extract_messages(agent_result) or messages
     state["events"] = [
         *state.get("events", []),
         {
@@ -41,3 +51,21 @@ def builder_node(state: LogicalState, role_client) -> LogicalState:
         },
     ]
     return state
+
+
+def _graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
+    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+    links = graph.get("links", []) if isinstance(graph, dict) else []
+    return {
+        "stage": graph.get("stage") if isinstance(graph, dict) else None,
+        "nodes": [{"id": node.get("id"), "type": node.get("type")} for node in nodes if isinstance(node, dict)],
+        "link_count": len(links),
+    }
+
+
+def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:
+    if isinstance(agent_result, dict):
+        messages = agent_result.get("messages")
+        if isinstance(messages, list):
+            return [item for item in messages if isinstance(item, dict) and item.get("role")]
+    return []

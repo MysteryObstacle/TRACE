@@ -14,23 +14,28 @@ def normalize_graph(graph: TGraph | dict[str, Any]) -> TGraph:
         node["ports"] = sorted(node.get("ports", []), key=lambda item: item["id"])
     data["nodes"] = nodes
 
-    port_owner: dict[str, str] = {}
-    for node in nodes:
-        for port in node.get("ports", []):
-            port_owner[str(port["id"])] = str(node["id"])
-
     normalized_links: list[dict[str, Any]] = []
     for link in data.get("links", []):
-        port_a = str(link["from_port"])
-        port_b = str(link["to_port"])
-        from_port, to_port = sorted((port_a, port_b))
+        from_node = str(link["from_node"])
+        to_node = str(link["to_node"])
+        if from_node <= to_node:
+            node_a = from_node
+            port_a = str(link["from_port"])
+            node_b = to_node
+            port_b = str(link["to_port"])
+        else:
+            node_a = to_node
+            port_a = str(link["to_port"])
+            node_b = from_node
+            port_b = str(link["from_port"])
+        key = _link_key(str(link["id"]), node_a, node_b)
         normalized_links.append(
             {
-                "id": _link_id(from_port, to_port),
-                "from_port": from_port,
-                "to_port": to_port,
-                "from_node": port_owner.get(from_port),
-                "to_node": port_owner.get(to_port),
+                "id": _link_id(node_a, node_b, key),
+                "from_port": port_a,
+                "to_port": port_b,
+                "from_node": node_a,
+                "to_node": node_b,
             }
         )
     data["links"] = sorted(normalized_links, key=lambda item: item["id"])
@@ -38,6 +43,14 @@ def normalize_graph(graph: TGraph | dict[str, Any]) -> TGraph:
     return TGraph.model_validate(data)
 
 
-def _link_id(from_port: str, to_port: str) -> str:
-    return f"{from_port}--{to_port}"
+def _link_id(from_node: str, to_node: str, key: str) -> str:
+    return f"{from_node}-{to_node}-{key}"
 
+
+def _link_key(link_id: str, from_node: str, to_node: str) -> str:
+    prefix = f"{from_node}-{to_node}-"
+    if link_id.startswith(prefix):
+        key = link_id.removeprefix(prefix)
+        if key and "-" not in key:
+            return key
+    return "1"

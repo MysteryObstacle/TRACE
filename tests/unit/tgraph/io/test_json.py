@@ -10,7 +10,7 @@ def _raw_graph() -> dict:
             {"id": "B", "type": "computer", "label": "B", "ports": [{"id": "b1"}]},
             {"id": "A", "type": "router", "label": "A", "ports": [{"id": "a1"}]},
         ],
-        "links": [{"id": "wrong", "from_port": "b1", "to_port": "a1"}],
+        "links": [{"id": "wrong", "from_node": "B", "from_port": "b1", "to_node": "A", "to_port": "a1"}],
     }
 
 
@@ -20,7 +20,7 @@ def test_load_tgraph_accepts_dict_and_normalizes_by_default():
     graph = load_tgraph(_raw_graph())
 
     assert [node.id for node in graph.nodes] == ["A", "B"]
-    assert graph.links[0].id == "a1--b1"
+    assert graph.links[0].id == "A-B-1"
 
 
 def test_load_tgraph_accepts_json_string():
@@ -29,7 +29,7 @@ def test_load_tgraph_accepts_json_string():
     graph = load_tgraph(json.dumps(_raw_graph()))
 
     assert graph.stage == "logical"
-    assert graph.links[0].id == "a1--b1"
+    assert graph.links[0].id == "A-B-1"
 
 
 def test_load_tgraph_accepts_file_path(tmp_path):
@@ -57,7 +57,7 @@ def test_dump_tgraph_returns_stable_dict_and_json_string():
             {"id": "A", "type": "router", "label": "A", "ports": [{"id": "a1", "ip": "", "cidr": ""}], "image": None, "flavor": None},
             {"id": "B", "type": "computer", "label": "B", "ports": [{"id": "b1", "ip": "", "cidr": ""}], "image": None, "flavor": None},
         ],
-        "links": [{"id": "a1--b1", "from_port": "a1", "to_port": "b1", "from_node": "A", "to_node": "B"}],
+        "links": [{"id": "A-B-1", "from_port": "a1", "to_port": "b1", "from_node": "A", "to_node": "B"}],
     }
     assert json.loads(dumped_json) == dumped
 
@@ -70,4 +70,3 @@ def test_load_tgraph_rejects_unknown_top_level_fields():
         load_tgraph({"stage": "logical", "nodes": [], "links": [], "metadata": {}})
 
     assert exc.value.code == "document_error"
-

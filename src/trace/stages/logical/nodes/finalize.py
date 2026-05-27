@@ -9,6 +9,7 @@ def finalize_node(state: LogicalState) -> LogicalState:
     state["result"] = {
         "stage_id": "logical",
         "artifact": artifact,
+        "support_files": state.get("support_files", {}),
         "memory_delta": {},
         "attempts_used": state["attempt"],
         "evaluation_summary": state.get("evaluation_report"),

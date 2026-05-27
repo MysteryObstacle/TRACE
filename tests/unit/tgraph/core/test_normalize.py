@@ -11,13 +11,13 @@ def test_normalize_canonicalizes_link_ids_and_endpoint_order():
                 {"id": "B", "type": "computer", "label": "B", "ports": [{"id": "b1"}]},
                 {"id": "A", "type": "router", "label": "A", "ports": [{"id": "a1"}]},
             ],
-            "links": [{"id": "wrong", "from_port": "b1", "to_port": "a1"}],
+            "links": [{"id": "wrong", "from_node": "B", "from_port": "b1", "to_node": "A", "to_port": "a1"}],
         }
     )
 
     normalized = normalize_graph(graph)
 
-    assert normalized.links[0].id == "a1--b1"
+    assert normalized.links[0].id == "A-B-1"
     assert normalized.links[0].from_port == "a1"
     assert normalized.links[0].to_port == "b1"
     assert normalized.links[0].from_node == "A"
@@ -45,8 +45,8 @@ def test_normalize_sorts_nodes_ports_and_links():
                 },
             ],
             "links": [
-                {"id": "z", "from_port": "r2p2", "to_port": "r2p1"},
-                {"id": "a", "from_port": "r1p2", "to_port": "r1p1"},
+                    {"id": "z", "from_node": "R2", "from_port": "r2p2", "to_node": "R2", "to_port": "r2p1"},
+                    {"id": "a", "from_node": "R1", "from_port": "r1p2", "to_node": "R1", "to_port": "r1p1"},
             ],
         }
     )
@@ -55,7 +55,7 @@ def test_normalize_sorts_nodes_ports_and_links():
 
     assert [node.id for node in normalized.nodes] == ["R1", "R2"]
     assert [port.id for port in normalized.nodes[0].ports] == ["r1p1", "r1p2"]
-    assert [link.id for link in normalized.links] == ["r1p1--r1p2", "r2p1--r2p2"]
+    assert [link.id for link in normalized.links] == ["R1-R1-1", "R2-R2-1"]
 
 
 def test_normalize_is_idempotent_and_does_not_mutate_input():
@@ -68,7 +68,7 @@ def test_normalize_is_idempotent_and_does_not_mutate_input():
                 {"id": "B", "type": "computer", "label": "B", "ports": [{"id": "b1"}]},
                 {"id": "A", "type": "router", "label": "A", "ports": [{"id": "a1"}]},
             ],
-            "links": [{"id": "wrong", "from_port": "b1", "to_port": "a1"}],
+            "links": [{"id": "wrong", "from_node": "B", "from_port": "b1", "to_node": "A", "to_port": "a1"}],
         }
     )
 
@@ -77,4 +77,3 @@ def test_normalize_is_idempotent_and_does_not_mutate_input():
 
     assert graph.links[0].id == "wrong"
     assert normalized.model_dump(mode="json") == normalized_again.model_dump(mode="json")
-
