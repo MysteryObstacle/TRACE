@@ -14,7 +14,13 @@ from trace.stages.ground.nodes.prepare import prepare_node
 from trace.stages.ground.state import GroundState
 
 
-def run_ground_stage(*, intent: str, role_client, settings: TraceSettings) -> dict[str, Any]:
+def run_ground_stage(
+    *,
+    intent: str,
+    role_client,
+    settings: TraceSettings,
+    escalation_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     graph = _build_ground_graph(role_client=role_client, settings=settings)
     with TemporaryDirectory(prefix="trace-ground-") as support_root:
         initial: GroundState = {
@@ -26,6 +32,7 @@ def run_ground_stage(*, intent: str, role_client, settings: TraceSettings) -> di
             "events": [],
             "support_files": {},
             "support_file_root": support_root,
+            "escalation_report": escalation_report,
         }
         final_state = graph.invoke(initial)
     return require_stage_result(stage_id="ground", final_state=final_state)

@@ -16,6 +16,18 @@ PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "evaluator.md"
 
 def evaluator_node(state: GroundState, role_client) -> Command:
     draft = state.get("draft_artifact", {})
+    if draft.get("unsolvable"):
+        reason = draft.get("unsolvable_reason") or "ground stage marked unsolvable"
+        return Command(
+            goto=END,
+            update={
+                "status": "unsolvable",
+                "error": {"message": reason, "issues": []},
+                "unsolvable_notes": [reason],
+                "events": [{"type": "ground.unsolvable", "reason": reason}],
+            },
+        )
+
     structural_issues = structural_issues_from_draft(draft)
 
     messages, raw_report = invoke_role(

@@ -20,15 +20,26 @@ def _report_passed(report) -> bool:
 
 def author_node(state: GroundState, role_client) -> GroundState:
     report = state.get("evaluation_report")
-    revising = bool(report) and not _report_passed(report)
-    author_mode = "feedback_revision" if revising else "initial_draft"
+    escalation_report = state.get("escalation_report")
+    escalation_mode = bool(escalation_report) and not _report_passed(state.get("evaluation_report"))
+    revising = bool(report) and not _report_passed(report) and not escalation_mode
+    author_mode = "feedback_revision" if (revising or escalation_mode) else "initial_draft"
 
     context_sections = {
         "author_mode": author_mode,
         "intent": state["intent"],
     }
 
-    if revising:
+    if escalation_mode:
+        context_sections["escalation_feedback"] = escalation_report
+        task = (
+            "Current task mode: `feedback_revision` (escalation).\n"
+            "A downstream stage reported issues that may stem from infeasible or conflicting constraints.\n"
+            "Re-evaluate `node_groups`, `logical_constraints`, `physical_constraints` against `escalation_feedback.issues`.\n"
+            "If the request is genuinely unsatisfiable, set `unsolvable=true` and fill `unsolvable_reason`.\n"
+            "Otherwise return a revised complete `GroundDraftArtifact`."
+        )
+    elif revising:
         context_sections["evaluation_feedback"] = report
         context_sections["evaluation_issues"] = report.get("issues", []) if isinstance(report, dict) else []
         context_sections["evaluation_notes"] = report.get("notes", []) if isinstance(report, dict) else []
@@ -65,5 +76,5 @@ def author_node(state: GroundState, role_client) -> GroundState:
         "messages": messages,
         "draft_artifact": artifact,
         "status": "evaluating",
-        "events": [{"type": "ground.author.completed", "revision": revising}],
+        "events": [{"type": "ground.author.completed", "revision": revising or escalation_mode}],
     }
