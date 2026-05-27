@@ -4,6 +4,48 @@ import json
 from pathlib import Path
 from typing import Any, MutableMapping
 
+from pydantic import BaseModel
+
+
+class _FilterParams(BaseModel):
+    match: str | None = None
+    keys: list[str] | None = None
+    head_lines: int | None = None
+
+
+def filtered_view(
+    content: str,
+    *,
+    match: str | None = None,
+    keys: list[str] | None = None,
+    head_lines: int | None = None,
+) -> str:
+    if match:
+        return _match_window(content, needle=match, context=1)
+    if keys:
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return content
+        if not isinstance(parsed, dict):
+            return content
+        subset = {key: parsed[key] for key in keys if key in parsed}
+        return json.dumps(subset, indent=2, ensure_ascii=False)
+    if head_lines is not None and head_lines >= 0:
+        return "\n".join(content.splitlines()[:head_lines])
+    return content
+
+
+def _match_window(content: str, *, needle: str, context: int) -> str:
+    lines = content.splitlines()
+    selected: set[int] = set()
+    for idx, line in enumerate(lines):
+        if needle in line:
+            start = max(0, idx - context)
+            stop = min(len(lines), idx + context + 1)
+            selected.update(range(start, stop))
+    return "\n".join(lines[i] for i in sorted(selected))
+
 
 def write_support_file(state: MutableMapping[str, Any], relative_path: str, content: str) -> None:
     path = _safe_relative_path(relative_path)
