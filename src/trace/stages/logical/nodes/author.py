@@ -17,7 +17,7 @@ from trace.stages.support_files import _FilterParams, filtered_view, write_suppo
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "author.md"
 DEFAULT_CHECKPOINT_PATH = "logical/checkpoints.py"
 DEFAULT_CONSTRAINT_PATH = LOGICAL_CONSTRAINTS_PATH
-MAX_TOOL_CALLS = 24
+MAX_REACT_STEPS = 24
 
 
 def author_node(state: LogicalState, role_client) -> LogicalState:
@@ -35,16 +35,18 @@ def author_node(state: LogicalState, role_client) -> LogicalState:
         role_name="logical_author",
         messages=messages,
         tools=author_tools.as_agent_tools(),
-        max_tool_calls=MAX_TOOL_CALLS,
+        max_react_steps=MAX_REACT_STEPS,
     )
     validation = author_tools.validate_checkpoint_file()
     if not validation["ok"]:
         raise ValueError(f"logical author produced invalid checkpoint file: {validation['issues']}")
 
-    state["author_output"] = author_tools.artifact_state()
-    state["messages"] = _extract_messages(agent_result) or messages
-    state["events"] = [*state.get("events", []), {"type": "logical.author.completed"}]
-    return state
+    return {
+        "author_output": author_tools.artifact_state(),
+        "support_files": dict(state.get("support_files") or {}),
+        "messages": _extract_messages(agent_result) or messages,
+        "events": [{"type": "logical.author.completed"}],
+    }
 
 
 class _WriteCheckpointFileInput(BaseModel):
