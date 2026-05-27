@@ -126,9 +126,36 @@ Tests (modify):
 - All stage validator tests — assert on `Command.goto` rather than `state["next_action"]`.
 - Stage integration tests — events list accumulates via reducer (no explicit `[*...]` patterns needed in nodes).
 
-### Chunk 4 — PR4 SqliteSaver checkpointer and escalation
+### Chunk 4 — PR4 SqliteSaver checkpointer and escalation reverse channel
 
-(Detailed task list will be appended after Chunk 3 reviewer approves.)
+Source files (logic change):
+
+- `pyproject.toml` — add `langgraph-checkpoint-sqlite` dependency.
+- `.gitignore` — `runs/*/state.sqlite` and `runs/*/state.sqlite-*` (SQLite WAL/SHM sidecar files).
+- `src/trace/runtime/engine.py` — wire `SqliteSaver` into `_build_run_graph`; pass `config={"configurable": {"thread_id": run_id}}` on `graph.invoke`; resume path prefers sqlite when present; route `escalated` stage results back to ground; bump `RunState` to include `escalation_history` (already added in Chunk 3 Task 3.1).
+- `src/trace/runtime/escalation.py` (new) — `ESCALATION_TO_GROUND_KINDS` constant set; `extract_escalation_issues(report)` helper; `build_escalation_report(stage_id, report, partial_artifact, attempt)` helper.
+- `src/trace/stages/ground/state.py` — fields `escalation_report: dict | None`, `unsolvable_notes: list[str]`.
+- `src/trace/stages/ground/__init__.py` — `run_ground_stage` accepts `escalation_report: dict | None = None` kwarg; seeds state.
+- `src/trace/stages/ground/nodes/author.py` — when `escalation_report` is present, prepend an `escalation_feedback` section in the author prompt context, reusing `feedback_revision` mode.
+- `src/trace/stages/ground/nodes/evaluator.py` — surface unsolvable via `Command(goto=END, update={"status": "unsolvable", ...})` when `draft_artifact.unsolvable == True`.
+- `src/trace/stages/ground/schemas.py` — `GroundDraftArtifact` gains optional `unsolvable: bool = False` and `unsolvable_reason: str | None = None`.
+- `src/trace/stages/logical/__init__.py`, `physical/__init__.py` — add `escalate` terminal node that shapes stage return to `{status: "escalated", escalation_report, partial_artifact, ...}`.
+- `src/trace/stages/logical/nodes/validator.py`, `physical/nodes/validator.py` — already Command-based after Chunk 3; add new escalation precedence branch.
+- `src/trace/stages/common.py` — `require_stage_result` recognizes `status=="escalated"`; passes through `escalation_report` and `partial_artifact`.
+- `README.md` — "从阶段恢复" section gains SqliteSaver + escalation paragraph.
+
+Tests (add):
+
+- `tests/unit/runtime/test_checkpointer.py` — sqlite file created post-run; resume picks up from sqlite if present; fork resume falls back to RunStorage.
+- `tests/unit/runtime/test_escalation_routing.py` — engine routes escalate → ground; counter cap at 2 → failed.
+- `tests/unit/stages/test_validator_escalation.py` — validator returns `Command(goto="escalate")` for white-list kinds; precedence: max_attempts > escalate > repair.
+- `tests/unit/stages/test_ground_escalation_mode.py` — author_node accepts escalation context; evaluator surfaces `Command(goto=END, update={"status": "unsolvable"})` when unsolvable.
+- `tests/integration/test_escalation_loop.py` — full loop with synthesized constraint conflict.
+
+Tests (modify):
+
+- `tests/integration/test_runtime_pipeline.py` — assert `runs/<run_id>/state.sqlite` exists.
+- Existing validator tests — extend with escalation branch coverage.
 
 ---
 
@@ -3505,4 +3532,1374 @@ PR3 chunk done.
 
 ---
 
-(Chunk 4 will be appended in subsequent revisions of this plan after Chunk 3 reviewer approves.)
+## Chunk 4: PR4 — SqliteSaver Checkpointer + Escalation Reverse Channel
+
+This chunk lands the two highest-risk pieces of the spec in one PR because they share the same RunState mutation surface (`escalation_history`, `attempt_counters["escalation"]`, sqlite-aware resume path). After PR4 merges, the runtime is fully aligned with the spec.
+
+**Branch / commit cadence:** ~12 commits. Run the full suite + a synthesized escalation smoke after each task.
+
+### Task 4.1: Add `langgraph-checkpoint-sqlite` dependency and gitignore
+
+**Files:**
+- Modify: `pyproject.toml`
+- Modify: `.gitignore`
+
+- [ ] **Step 1: Inventory current langgraph pins**
+
+Run: `rg -n "langgraph" pyproject.toml`
+Capture pinned versions to choose a compatible `langgraph-checkpoint-sqlite` release.
+
+- [ ] **Step 2: Add dependency**
+
+In `pyproject.toml` under `[project] dependencies` (or matching list):
+
+```toml
+"langgraph-checkpoint-sqlite>=2.0.0,<3.0.0",
+```
+
+Pin range must be compatible with the existing `langgraph>=1.x` pin. Update the lower bound to whatever the matching release notes call out for `langgraph` 1.x; this plan uses 2.0.0 as a placeholder — verify on PyPI before commit.
+
+- [ ] **Step 3: Append to `.gitignore`**
+
+```
+runs/*/state.sqlite
+runs/*/state.sqlite-*
+```
+
+(The second line catches SQLite WAL/SHM sidecar files.)
+
+- [ ] **Step 4: Install and verify import**
+
+Run (PowerShell):
+
+```powershell
+pip install -e .
+python -c "from langgraph.checkpoint.sqlite import SqliteSaver; print(SqliteSaver)"
+```
+
+Expected: prints the class.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add pyproject.toml .gitignore
+git commit -m "build: add langgraph-checkpoint-sqlite dependency"
+```
+
+### Task 4.2: Define escalation constants and helpers
+
+**Files:**
+- Create: `src/trace/runtime/escalation.py`
+- Create test: `tests/unit/runtime/test_escalation.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# tests/unit/runtime/test_escalation.py
+from trace.runtime.escalation import (
+    ESCALATION_TO_GROUND_KINDS,
+    extract_escalation_issues,
+    build_escalation_report,
+)
+
+
+def test_white_list_includes_documented_kinds():
+    assert ESCALATION_TO_GROUND_KINDS == frozenset({
+        "logical.escalation.constraint_conflict",
+        "logical.escalation.no_satisfying_topology",
+        "physical.escalation.no_satisfying_image",
+        "physical.escalation.no_satisfying_flavor",
+    })
+
+
+def test_extract_escalation_issues_filters_by_kind():
+    report = {
+        "issues": [
+            {"details": {"issue_kind": "logical.escalation.constraint_conflict", "summary": "A vs B"}},
+            {"details": {"issue_kind": "logical.missing_link"}},
+            {"details": {"issue_kind": "physical.escalation.no_satisfying_image"}},
+        ]
+    }
+    matched = extract_escalation_issues(report)
+    kinds = [item["details"]["issue_kind"] for item in matched]
+    assert kinds == ["logical.escalation.constraint_conflict", "physical.escalation.no_satisfying_image"]
+
+
+def test_extract_escalation_issues_empty_when_no_matches():
+    report = {"issues": [{"details": {"issue_kind": "logical.missing_link"}}]}
+    assert extract_escalation_issues(report) == []
+
+
+def test_build_escalation_report_shape():
+    report = {"issues": [{"details": {"issue_kind": "logical.escalation.constraint_conflict", "summary": "A vs B"}}]}
+    partial_artifact = {"graph": {"nodes": []}}
+    payload = build_escalation_report(
+        stage_id="logical",
+        report=report,
+        partial_artifact=partial_artifact,
+        attempt=3,
+    )
+    assert payload["source_stage"] == "logical"
+    assert payload["attempt_at_escalation"] == 3
+    assert payload["issues"] == report["issues"]  # full forwarding; ground decides how much to surface
+    assert payload["partial_artifact"] == partial_artifact
+```
+
+- [ ] **Step 2: Run test to verify fail**
+
+Run: `pytest tests/unit/runtime/test_escalation.py -v`
+Expected: FAIL — module doesn't exist.
+
+- [ ] **Step 3: Implement `escalation.py`**
+
+```python
+# src/trace/runtime/escalation.py
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+
+ESCALATION_TO_GROUND_KINDS: frozenset[str] = frozenset({
+    "logical.escalation.constraint_conflict",
+    "logical.escalation.no_satisfying_topology",
+    "physical.escalation.no_satisfying_image",
+    "physical.escalation.no_satisfying_flavor",
+})
+
+
+def extract_escalation_issues(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    matches: list[dict[str, Any]] = []
+    for issue in report.get("issues", []) or []:
+        details = issue.get("details") if isinstance(issue, dict) else None
+        if not isinstance(details, dict):
+            continue
+        if details.get("issue_kind") in ESCALATION_TO_GROUND_KINDS:
+            matches.append(issue)
+    return matches
+
+
+def build_escalation_report(
+    *,
+    stage_id: str,
+    report: dict[str, Any],
+    partial_artifact: dict[str, Any] | None,
+    attempt: int,
+) -> dict[str, Any]:
+    return {
+        "source_stage": stage_id,
+        "attempt_at_escalation": attempt,
+        "issues": list(report.get("issues", []) or []),
+        "notes": list(report.get("notes", []) or []),
+        "partial_artifact": partial_artifact or {},
+        "created_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `pytest tests/unit/runtime/test_escalation.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/runtime/escalation.py tests/unit/runtime/test_escalation.py
+git commit -m "feat(runtime): escalation kind white-list and helpers"
+```
+
+### Task 4.3: Extend `GroundState` and `GroundDraftArtifact` for escalation
+
+**Files:**
+- Modify: `src/trace/stages/ground/state.py`
+- Modify: `src/trace/stages/ground/schemas.py`
+- Test: `tests/unit/stages/test_ground_escalation_mode.py` (created in Task 4.5; here just verify schema)
+
+- [ ] **Step 1: Update `GroundState`**
+
+In `src/trace/stages/ground/state.py`:
+
+```python
+class GroundState(TypedDict, total=False):
+    intent: str
+    grounding_checks: dict[str, Any]
+    attempt: int
+    max_attempts: int
+    status: str
+    draft_artifact: dict[str, Any]
+    evaluation_report: dict[str, Any]
+    messages: list[dict[str, str]]
+    retry_history: Annotated[list[dict[str, Any]], operator.add]
+    events: Annotated[list[dict[str, Any]], operator.add]
+    support_files: dict[str, str]
+    support_file_root: str
+    result: dict[str, Any]
+    error: dict[str, Any] | None
+    escalation_report: dict[str, Any] | None
+    unsolvable_notes: list[str]
+```
+
+- [ ] **Step 2: Update `GroundDraftArtifact`**
+
+Find the model definition in `src/trace/stages/ground/schemas.py`. Add (alongside existing fields):
+
+```python
+class GroundDraftArtifact(BaseModel):
+    # ... existing fields ...
+    unsolvable: bool = False
+    unsolvable_reason: str | None = None
+```
+
+Run: `rg -n "class GroundDraftArtifact" src/trace/stages/ground` to locate.
+
+- [ ] **Step 3: Smoke test**
+
+Run: `python -c "from trace.stages.ground.schemas import GroundDraftArtifact; a = GroundDraftArtifact(intent='x', node_groups=[], logical_constraints=[], physical_constraints=[], unsolvable=True, unsolvable_reason='r'); print(a.unsolvable)"`
+Expected: prints `True`.
+
+(If the model has required fields beyond these, adapt the smoke call.)
+
+- [ ] **Step 4: Run ground stage tests**
+
+Run: `pytest tests/unit/stages -k ground -v`
+Expected: PASS — existing tests don't assert against new optional fields.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/trace/stages/ground/state.py src/trace/stages/ground/schemas.py
+git commit -m "feat(ground): add escalation_report state and unsolvable schema fields"
+```
+
+### Task 4.4: Convert stage validators to recognize escalation issue kinds
+
+**Files:**
+- Modify: `src/trace/stages/logical/nodes/validator.py`
+- Modify: `src/trace/stages/physical/nodes/validator.py`
+- Modify: `src/trace/stages/logical/__init__.py`, `physical/__init__.py` (add `escalate` node)
+- Create test: `tests/unit/stages/test_validator_escalation.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_validator_escalation.py
+from langgraph.graph import END
+from langgraph.types import Command
+
+
+def _physical_state(*, attempt=1, max_attempts=3, issue_kind="physical.escalation.no_satisfying_image"):
+    return {
+        "logical_artifact": {"graph": {"nodes": [], "links": []}},
+        "draft_artifact": {"graph": {"nodes": [], "links": []}},
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        # injected by monkeypatched _validate_physical_artifact below
+    }
+
+
+def test_physical_validator_routes_to_escalate_when_kind_matches(monkeypatch):
+    from trace.stages.physical.nodes.validator import validator_node
+
+    monkeypatch.setattr(
+        "trace.stages.physical.nodes.validator._validate_physical_artifact",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "issues": [{"details": {"issue_kind": "physical.escalation.no_satisfying_image"}}],
+        },
+    )
+    result = validator_node(_physical_state(attempt=1, max_attempts=3))
+    assert isinstance(result, Command)
+    assert result.goto == "escalate"
+    assert result.update.get("evaluation_report")["issues"][0]["details"]["issue_kind"] == "physical.escalation.no_satisfying_image"
+
+
+def test_physical_validator_prefers_escalate_when_attempts_exhausted_and_kind_matches(monkeypatch):
+    from trace.stages.physical.nodes.validator import validator_node
+
+    monkeypatch.setattr(
+        "trace.stages.physical.nodes.validator._validate_physical_artifact",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "issues": [{"details": {"issue_kind": "physical.escalation.no_satisfying_image"}}],
+        },
+    )
+    # Per spec: even when attempts exhausted, escalation kind still routes to escalate.
+    result = validator_node(_physical_state(attempt=3, max_attempts=3))
+    assert result.goto == "escalate"
+
+
+def test_physical_validator_falls_back_to_failed_when_attempts_exhausted_without_escalation_kind(monkeypatch):
+    from trace.stages.physical.nodes.validator import validator_node
+
+    monkeypatch.setattr(
+        "trace.stages.physical.nodes.validator._validate_physical_artifact",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "issues": [{"details": {"issue_kind": "physical.missing_field"}}],
+        },
+    )
+    result = validator_node(_physical_state(attempt=3, max_attempts=3))
+    assert result.goto == END
+    assert result.update.get("error") is not None
+
+
+def test_physical_validator_does_not_escalate_when_ok(monkeypatch):
+    from trace.stages.physical.nodes.validator import validator_node
+
+    monkeypatch.setattr(
+        "trace.stages.physical.nodes.validator._validate_physical_artifact",
+        lambda *_args, **_kwargs: {"ok": True, "issues": []},
+    )
+    result = validator_node(_physical_state(attempt=1, max_attempts=3))
+    assert result.goto == "finalize"
+
+
+def test_logical_validator_routes_to_escalate_when_kind_matches(monkeypatch):
+    from trace.stages.logical.nodes.validator import validator_node
+
+    monkeypatch.setattr(
+        "trace.stages.logical.nodes.validator._validate_logical_artifact",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "issues": [{"details": {"issue_kind": "logical.escalation.constraint_conflict"}}],
+        },
+    )
+    state = {"draft_artifact": {"graph": {}}, "attempt": 1, "max_attempts": 3}
+    result = validator_node(state)
+    assert result.goto == "escalate"
+```
+
+- [ ] **Step 2: Run tests to verify fail**
+
+Run: `pytest tests/unit/stages/test_validator_escalation.py -v`
+Expected: FAIL — `escalate` branch doesn't exist; old validator returns `Command(goto="repair")` or `END` for these inputs.
+
+- [ ] **Step 3: Update `physical/nodes/validator.py` precedence**
+
+```python
+from langgraph.graph import END
+from langgraph.types import Command
+
+from trace.runtime.escalation import build_escalation_report, extract_escalation_issues
+from trace.stages.physical.state import PhysicalState
+
+
+def validator_node(state: PhysicalState) -> Command:
+    report = _validate_physical_artifact(
+        artifact=state["draft_artifact"],
+        logical_graph=state["logical_artifact"]["graph"],
+        state=state,
+    )
+    if report["ok"]:
+        return Command(goto="finalize", update={"evaluation_report": report})
+
+    escalation_issues = extract_escalation_issues(report)
+    attempts_exhausted = state["attempt"] >= state["max_attempts"]
+    # Precedence per spec module G:
+    # - escalation kinds always route to escalate (independent of attempt budget),
+    #   because these issues are not agent-fixable by repair.
+    # - otherwise, attempts exhausted → failed; otherwise → repair.
+    if escalation_issues:
+        partial_artifact = state.get("draft_artifact")
+        escalation_payload = build_escalation_report(
+            stage_id="physical",
+            report=report,
+            partial_artifact=partial_artifact,
+            attempt=state["attempt"],
+        )
+        return Command(
+            goto="escalate",
+            update={"evaluation_report": report, "escalation_report": escalation_payload},
+        )
+    if attempts_exhausted:
+        return Command(
+            goto=END,
+            update={
+                "evaluation_report": report,
+                "error": {"message": "physical stage exceeded max attempts", "issues": report["issues"]},
+            },
+        )
+    return Command(goto="repair", update={"evaluation_report": report})
+```
+
+(Add `escalation_report` to `PhysicalState` if not already present:
+
+```python
+class PhysicalState(TypedDict, total=False):
+    # ... existing fields ...
+    escalation_report: dict[str, Any] | None
+```
+)
+
+- [ ] **Step 4: Mirror in `logical/nodes/validator.py`**
+
+Same shape with `stage_id="logical"`. Add `escalation_report` to `LogicalState`.
+
+- [ ] **Step 5: Add `escalate` node to stage graphs**
+
+In `src/trace/stages/physical/__init__.py`:
+
+```python
+def _build_physical_graph(*, role_client, settings):
+    del settings
+    graph = StateGraph(PhysicalState)
+    graph.add_node("prepare", prepare_node)
+    graph.add_node("author", lambda state: author_node(state, role_client))
+    graph.add_node("builder", lambda state: builder_node(state, role_client))
+    graph.add_node("validator", validator_node)
+    graph.add_node("repair", lambda state: repair_node(state, role_client))
+    graph.add_node("finalize", finalize_node)
+    graph.add_node("escalate", _escalate_node)
+    graph.set_entry_point("prepare")
+    graph.add_edge("prepare", "author")
+    graph.add_edge("author", "builder")
+    graph.add_edge("builder", "validator")
+    graph.add_edge("repair", "validator")
+    graph.add_edge("finalize", END)
+    graph.add_edge("escalate", END)
+    return graph.compile()
+
+
+def _escalate_node(state: PhysicalState) -> dict[str, Any]:
+    # Shape the final state so require_stage_result recognizes the escalated outcome.
+    return {
+        "result": {
+            "status": "escalated",
+            "escalation_report": state.get("escalation_report"),
+            "partial_artifact": state.get("draft_artifact"),
+            "evaluation_summary": state.get("evaluation_report"),
+            "attempts_used": state.get("attempt", 1),
+        },
+        "events": [{"type": "physical.escalated", "attempt": state.get("attempt", 1)}],
+    }
+```
+
+Mirror for logical stage.
+
+- [ ] **Step 6: Update `require_stage_result` to recognize `escalated`**
+
+In `src/trace/stages/common.py`, find `require_stage_result`. Adapt so that when `result["status"] == "escalated"`:
+
+```python
+def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[str, Any]:
+    result = final_state.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{stage_id!r} stage produced no result")
+
+    status = result.get("status")
+    if status == "escalated":
+        return {
+            "status": "escalated",
+            "escalation_report": result.get("escalation_report") or {},
+            "partial_artifact": result.get("partial_artifact") or {},
+            "evaluation_summary": result.get("evaluation_summary") or {},
+            "attempts_used": result.get("attempts_used", 1),
+            "messages": final_state.get("messages", []),
+            "tool_journal": final_state.get("tool_journal", []),
+            _stage_history_name(stage_id): final_state.get(_stage_history_name(stage_id), []),
+            "events": final_state.get("events", []),
+            "support_files": final_state.get("support_files", {}),
+        }
+
+    # ... existing handling for "completed" / "failed" ...
+```
+
+(Verify existing keys returned for non-escalated cases match the shape `TraceRuntime._merge_stage_result` consumes; preserve every key.)
+
+- [ ] **Step 7: Run tests**
+
+Run: `pytest tests/unit/stages/test_validator_escalation.py tests/unit/stages -v`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/trace/stages tests/unit/stages
+git commit -m "feat(stages): validator routes escalation kinds to dedicated escalate node"
+```
+
+### Task 4.5: Wire `escalation_report` through `run_ground_stage` and `ground.author`
+
+**Files:**
+- Modify: `src/trace/stages/ground/__init__.py`
+- Modify: `src/trace/stages/ground/nodes/author.py`
+- Modify: `src/trace/stages/ground/nodes/evaluator.py` (unsolvable detection)
+- Create test: `tests/unit/stages/test_ground_escalation_mode.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/stages/test_ground_escalation_mode.py
+from langgraph.graph import END
+from langgraph.types import Command
+
+
+def test_author_node_includes_escalation_section_when_report_present(monkeypatch):
+    from trace.stages.ground.nodes.author import author_node
+
+    captured = {}
+
+    def _stub_invoke_role(*, role_client, role_name, system_prompt_path, task, context_sections, schema):
+        captured["task"] = task
+        captured["context_sections"] = context_sections
+        return [], {"intent": "x", "node_groups": [], "logical_constraints": [], "physical_constraints": []}
+
+    monkeypatch.setattr("trace.stages.ground.nodes.author.invoke_role", _stub_invoke_role)
+    state = {
+        "intent": "x",
+        "evaluation_report": None,
+        "escalation_report": {
+            "source_stage": "logical",
+            "attempt_at_escalation": 2,
+            "issues": [{"details": {"issue_kind": "logical.escalation.constraint_conflict", "summary": "A vs B"}}],
+            "partial_artifact": {"graph": {"nodes": []}},
+        },
+    }
+    author_node(state, role_client=None)
+    assert "escalation_feedback" in captured["context_sections"]
+    assert captured["context_sections"]["escalation_feedback"]["source_stage"] == "logical"
+    assert "feedback_revision" in captured["task"] or "escalation" in captured["task"]
+
+
+def test_evaluator_node_returns_unsolvable_command_when_artifact_flagged(monkeypatch):
+    from trace.stages.ground.nodes.evaluator import evaluator_node
+
+    def _stub_invoke_role(*, role_client, role_name, system_prompt_path, task, context_sections, schema):
+        return [], {"passed": True, "issues": [], "notes": []}
+
+    monkeypatch.setattr("trace.stages.ground.nodes.evaluator.invoke_role", _stub_invoke_role)
+    state = {
+        "draft_artifact": {
+            "intent": "x",
+            "node_groups": [],
+            "logical_constraints": [],
+            "physical_constraints": [],
+            "unsolvable": True,
+            "unsolvable_reason": "user intent contradicts itself",
+        },
+        "attempt": 1,
+        "max_attempts": 3,
+    }
+    result = evaluator_node(state, role_client=None)
+    assert isinstance(result, Command)
+    assert result.goto == END
+    assert result.update.get("status") == "unsolvable"
+    assert "unsolvable_notes" in result.update
+```
+
+- [ ] **Step 2: Run tests to verify fail**
+
+Run: `pytest tests/unit/stages/test_ground_escalation_mode.py -v`
+Expected: FAIL — author_node ignores `escalation_report`; evaluator doesn't surface `unsolvable`.
+
+- [ ] **Step 3: Update `run_ground_stage` signature**
+
+In `src/trace/stages/ground/__init__.py`:
+
+```python
+def run_ground_stage(
+    *,
+    intent: str,
+    role_client,
+    settings: TraceSettings,
+    escalation_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    graph = _build_ground_graph(role_client=role_client, settings=settings)
+    with TemporaryDirectory(prefix="trace-ground-") as support_root:
+        initial: GroundState = {
+            "intent": intent,
+            "attempt": 1,
+            "max_attempts": settings.roles["ground_evaluator"].max_attempts,
+            "status": "preparing",
+            "retry_history": [],
+            "events": [],
+            "support_files": {},
+            "support_file_root": support_root,
+            "escalation_report": escalation_report,
+        }
+        final_state = graph.invoke(initial)
+    return require_stage_result(stage_id="ground", final_state=final_state)
+```
+
+- [ ] **Step 4: Update `ground/nodes/author.py`**
+
+Insert at the top of `author_node`, before computing `author_mode`:
+
+```python
+escalation_report = state.get("escalation_report")
+escalation_mode = bool(escalation_report) and not _report_passed(state.get("evaluation_report"))
+```
+
+In the `revising` branch (or a new branch for escalation), inject:
+
+```python
+if escalation_mode:
+    context_sections["escalation_feedback"] = escalation_report
+    task = (
+        "Current task mode: `feedback_revision` (escalation).\n"
+        "A downstream stage reported issues that may stem from infeasible or conflicting constraints.\n"
+        "Re-evaluate `node_groups`, `logical_constraints`, `physical_constraints` against `escalation_feedback.issues`.\n"
+        "If the request is genuinely unsatisfiable, set `unsolvable=true` and fill `unsolvable_reason`.\n"
+        "Otherwise return a revised complete `GroundDraftArtifact`."
+    )
+```
+
+(Keep existing `feedback_revision` and `initial_draft` branches mutually exclusive: `escalation_mode` takes priority over `revising` when both are true.)
+
+- [ ] **Step 5: Update `ground/nodes/evaluator.py`**
+
+Convert to `Command` (Chunk 3 Task 3.7 already did this). Add an extra branch at the top of the post-evaluation logic:
+
+```python
+def evaluator_node(state: GroundState, role_client) -> Command:
+    # ... existing semantic evaluation ...
+    draft = state.get("draft_artifact", {})
+    if draft.get("unsolvable"):
+        reason = draft.get("unsolvable_reason") or "ground stage marked unsolvable"
+        return Command(
+            goto=END,
+            update={
+                "status": "unsolvable",
+                "error": {"message": reason, "issues": draft.get("unsolvable_reason", [])},
+                "unsolvable_notes": [reason],
+                "events": [{"type": "ground.unsolvable", "reason": reason}],
+            },
+        )
+    # ... existing pass/fail/retry routing ...
+```
+
+- [ ] **Step 6: Run tests**
+
+Run: `pytest tests/unit/stages/test_ground_escalation_mode.py tests/unit/stages -v`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/trace/stages/ground tests/unit/stages
+git commit -m "feat(ground): author accepts escalation_report; evaluator surfaces unsolvable"
+```
+
+### Task 4.6: Engine routes escalated stage back to ground with counter cap
+
+**Files:**
+- Modify: `src/trace/runtime/engine.py`
+- Create test: `tests/unit/runtime/test_escalation_routing.py`
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# tests/unit/runtime/test_escalation_routing.py
+from unittest.mock import MagicMock, patch
+from trace.runtime.engine import TraceRuntime
+
+
+def _runtime():
+    settings = MagicMock()
+    settings.roles = {}
+    settings.langsmith.enabled = False
+    return TraceRuntime(settings=settings, role_client=MagicMock(), output_root="runs/_tmp_escalation_test")
+
+
+def test_logical_escalated_routes_back_to_ground():
+    from langgraph.types import Command
+
+    runtime = _runtime()
+    state = {
+        "run_id": "test", "intent": "x", "status": "running",
+        "artifacts": {"ground": {"graph": {}}},
+        "attempt_counters": {},
+        "events": [], "support_files": {},
+    }
+    fake_result = {
+        "status": "escalated",
+        "escalation_report": {"source_stage": "logical", "issues": [{"details": {"issue_kind": "logical.escalation.constraint_conflict"}}]},
+        "partial_artifact": {"graph": {}},
+        "evaluation_summary": {"ok": False, "issues": []},
+        "attempts_used": 2,
+        "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+    }
+    with patch("trace.runtime.engine.run_logical_stage", return_value=fake_result):
+        result = runtime._run_logical(state)
+    assert isinstance(result, Command)
+    assert result.goto == "ground"
+    assert result.update["attempt_counters"]["escalation"] == 1
+    assert len(result.update["escalation_history"]) == 1
+
+
+def test_escalation_counter_cap_aborts_to_failed():
+    from langgraph.graph import END
+    from langgraph.types import Command
+
+    runtime = _runtime()
+    state = {
+        "run_id": "test", "intent": "x", "status": "running",
+        "artifacts": {"ground": {"graph": {}}},
+        "attempt_counters": {"escalation": 2},  # cap reached
+        "events": [], "support_files": {},
+    }
+    fake_result = {
+        "status": "escalated",
+        "escalation_report": {"source_stage": "physical"},
+        "partial_artifact": {},
+        "evaluation_summary": {"ok": False, "issues": []},
+        "attempts_used": 1,
+        "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+    }
+    with patch("trace.runtime.engine.run_physical_stage", return_value=fake_result):
+        result = runtime._run_physical(state)
+    assert isinstance(result, Command)
+    assert result.goto == END
+    assert result.update.get("status") == "failed"
+
+
+def test_ground_consumes_escalation_report_once():
+    runtime = _runtime()
+    state = {
+        "run_id": "test", "intent": "x", "status": "running",
+        "artifacts": {}, "attempt_counters": {"escalation": 1},
+        "events": [], "support_files": {},
+        "escalation_report": {"source_stage": "logical", "issues": []},
+    }
+    fake_result = {
+        "status": "completed",
+        "artifact": {"intent": "x", "node_groups": [], "logical_constraints": [], "physical_constraints": []},
+        "evaluation_summary": {"ok": True, "issues": []},
+        "attempts_used": 1,
+        "messages": [], "tool_journal": [], "retry_history": [], "events": [], "support_files": {},
+    }
+    captured_kwargs: dict = {}
+
+    def _capture(**kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_result
+
+    with patch("trace.runtime.engine.run_ground_stage", side_effect=_capture):
+        runtime._run_ground(state)
+    assert "escalation_report" in captured_kwargs
+    assert captured_kwargs["escalation_report"]["source_stage"] == "logical"
+```
+
+- [ ] **Step 2: Run tests to verify fail**
+
+Run: `pytest tests/unit/runtime/test_escalation_routing.py -v`
+Expected: FAIL — `_run_logical` etc. don't return `Command`; counter cap not enforced.
+
+- [ ] **Step 3: Update engine `_run_*` methods**
+
+Refactor `_run_logical` and `_run_physical` to return `Command` for the escalation case while still returning a plain dict (partial update) for the normal case (LangGraph accepts both). The cleanest pattern: always return `Command(goto=<next>, update=<partial>)` from the runtime nodes once one path needs `Command`.
+
+```python
+def _run_logical(self, state: RunState) -> Command | dict[str, Any]:
+    try:
+        with self.observer.stage_run("logical", run_id=state["run_id"]):
+            result = run_logical_stage(
+                ground_artifact=state["artifacts"]["ground"],
+                inherited_support_files=state.get("support_files", {}),
+                role_client=self.role_client,
+                settings=self.settings,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return self._merge_stage_exception(state, "logical", exc)
+
+    if result.get("status") == "escalated":
+        return self._handle_stage_escalation(state, "logical", result)
+
+    partial = self._merge_stage_result(state, "logical", result)
+    return Command(goto="physical", update=partial)
+
+
+def _run_physical(self, state: RunState) -> Command | dict[str, Any]:
+    try:
+        with self.observer.stage_run("physical", run_id=state["run_id"]):
+            result = run_physical_stage(
+                logical_artifact=state["artifacts"]["logical"],
+                ground_artifact=state["artifacts"]["ground"],
+                inherited_support_files=state.get("support_files", {}),
+                role_client=self.role_client,
+                settings=self.settings,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return self._merge_stage_exception(state, "physical", exc)
+
+    if result.get("status") == "escalated":
+        return self._handle_stage_escalation(state, "physical", result)
+
+    partial = self._merge_stage_result(state, "physical", result)
+    return Command(goto="finalize", update=partial)
+
+
+def _run_ground(self, state: RunState) -> Command | dict[str, Any]:
+    escalation_report = state.get("escalation_report")
+    try:
+        with self.observer.stage_run("ground", run_id=state["run_id"]):
+            result = run_ground_stage(
+                intent=state["intent"],
+                role_client=self.role_client,
+                settings=self.settings,
+                escalation_report=escalation_report,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return self._merge_stage_exception(state, "ground", exc)
+
+    partial = self._merge_stage_result(state, "ground", result)
+    if escalation_report is not None:
+        partial = {**partial, "escalation_report": None}  # consume once
+    if result.get("status") == "unsolvable":
+        partial["status"] = "unsolvable"
+        return Command(goto=END, update=partial)
+    return Command(goto="logical", update=partial)
+
+
+ESCALATION_LIMIT = 2
+
+
+def _handle_stage_escalation(self, state: RunState, stage_id: str, result: dict[str, Any]) -> Command:
+    escalation_counter = (state.get("attempt_counters") or {}).get("escalation", 0)
+    escalation_report = result.get("escalation_report") or {}
+    payload = {
+        "events": [{"type": f"{stage_id}.escalation_received", "stage": stage_id, "counter": escalation_counter + 1}],
+        "escalation_history": [{
+            "stage": stage_id,
+            "counter": escalation_counter + 1,
+            "report": escalation_report,
+        }],
+        "attempt_counters": {**(state.get("attempt_counters") or {}), "escalation": escalation_counter + 1},
+    }
+    if escalation_counter + 1 > ESCALATION_LIMIT:
+        return Command(
+            goto=END,
+            update={
+                **payload,
+                "status": "failed",
+                "error": {
+                    "stage_id": stage_id,
+                    "type": "EscalationLimitExceeded",
+                    "message": f"escalation limit ({ESCALATION_LIMIT}) reached at {stage_id}",
+                },
+            },
+        )
+    return Command(
+        goto="ground",
+        update={
+            **payload,
+            "escalation_report": escalation_report,
+            "current_stage": "ground",
+        },
+    )
+```
+
+- [ ] **Step 4: Drop `_next_unless_failed` conditional edges**
+
+`Command(goto=...)` replaces conditional edges; in `_build_run_graph`:
+
+```python
+def _build_run_graph(self, *, entry_stage: str = "ground"):
+    if entry_stage not in RUN_STAGE_ORDER:
+        raise ValueError(f"unsupported run graph entry stage: {entry_stage}")
+    graph = StateGraph(RunState)
+    graph.add_node("ground", self._run_ground)
+    graph.add_node("logical", self._run_logical)
+    graph.add_node("physical", self._run_physical)
+    graph.add_node("finalize", self._finalize)
+    graph.set_entry_point(entry_stage)
+    graph.add_edge("finalize", END)
+    # Conditional routing is encoded in each node's Command return.
+    return graph.compile()
+```
+
+`_merge_stage_exception` now also needs to return a `Command(goto=END, update=partial)` rather than a partial dict, to terminate the graph.
+
+```python
+def _merge_stage_exception(self, state: RunState, stage_id: str, exc: Exception) -> Command:
+    # ... existing setup ...
+    return Command(goto=END, update=partial)
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `pytest tests/unit/runtime/test_escalation_routing.py tests/integration/test_runtime_pipeline.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/runtime/engine.py tests/unit/runtime/test_escalation_routing.py
+git commit -m "feat(runtime): route escalated stage back to ground with counter cap"
+```
+
+### Task 4.7: Integration test for full escalation loop
+
+**Files:**
+- Create: `tests/integration/test_escalation_loop.py`
+
+- [ ] **Step 1: Write integration test**
+
+```python
+# tests/integration/test_escalation_loop.py
+import json
+from pathlib import Path
+from trace.runtime.engine import TraceRuntime
+
+
+def test_full_escalation_loop_recovers(tmp_path, monkeypatch):
+    """Simulate logical stage emitting an escalation issue on first call;
+    ground revises artifact; second logical call succeeds.
+    """
+    runtime = TraceRuntime(output_root=tmp_path)
+
+    call_count = {"ground": 0, "logical": 0, "physical": 0}
+
+    def fake_ground(**kwargs):
+        call_count["ground"] += 1
+        return {
+            "status": "completed",
+            "artifact": {
+                "intent": kwargs["intent"],
+                "node_groups": [],
+                "logical_constraints": [],
+                "physical_constraints": [],
+                "unsolvable": False,
+            },
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "retry_history": [],
+            "events": [{"type": "ground.completed", "round": call_count["ground"]}],
+            "support_files": {},
+        }
+
+    def fake_logical(**kwargs):
+        call_count["logical"] += 1
+        if call_count["logical"] == 1:
+            return {
+                "status": "escalated",
+                "escalation_report": {
+                    "source_stage": "logical",
+                    "attempt_at_escalation": 1,
+                    "issues": [{"details": {"issue_kind": "logical.escalation.constraint_conflict"}}],
+                    "partial_artifact": {},
+                },
+                "partial_artifact": {"graph": {"nodes": [], "links": []}},
+                "evaluation_summary": {"ok": False, "issues": []},
+                "attempts_used": 1,
+                "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+            }
+        return {
+            "status": "completed",
+            "artifact": {"graph": {"nodes": [{"id": "n1"}], "links": []}},
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+        }
+
+    def fake_physical(**kwargs):
+        call_count["physical"] += 1
+        return {
+            "status": "completed",
+            "artifact": {"graph": {"nodes": [], "links": []}, "constraint_files": {}, "checkpoint_files": {}},
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+        }
+
+    monkeypatch.setattr("trace.runtime.engine.run_ground_stage", fake_ground)
+    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", fake_logical)
+    monkeypatch.setattr("trace.runtime.engine.run_physical_stage", fake_physical)
+
+    final = runtime.run(intent="x", run_id="escalation-loop")
+
+    assert call_count["ground"] == 2  # initial + revised
+    assert call_count["logical"] == 2  # escalated + recovered
+    assert call_count["physical"] == 1  # only after logical succeeds
+    assert final["status"] == "completed"
+    assert len(final.get("escalation_history", [])) == 1
+    assert final["escalation_history"][0]["stage"] == "logical"
+
+
+def test_escalation_limit_terminates(tmp_path, monkeypatch):
+    runtime = TraceRuntime(output_root=tmp_path)
+
+    def fake_ground(**kwargs):
+        return {
+            "status": "completed",
+            "artifact": {"intent": "x", "node_groups": [], "logical_constraints": [], "physical_constraints": []},
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "retry_history": [], "events": [], "support_files": {},
+        }
+
+    def fake_logical(**kwargs):
+        return {
+            "status": "escalated",
+            "escalation_report": {"source_stage": "logical", "issues": []},
+            "partial_artifact": {},
+            "evaluation_summary": {"ok": False, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "repair_history": [], "events": [], "support_files": {},
+        }
+
+    monkeypatch.setattr("trace.runtime.engine.run_ground_stage", fake_ground)
+    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", fake_logical)
+
+    final = runtime.run(intent="x", run_id="escalation-cap")
+    assert final["status"] == "failed"
+    assert "EscalationLimitExceeded" in final.get("error", {}).get("type", "")
+```
+
+- [ ] **Step 2: Run test**
+
+Run: `pytest tests/integration/test_escalation_loop.py -v`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/integration/test_escalation_loop.py
+git commit -m "test(integration): end-to-end escalation loop and counter cap"
+```
+
+### Task 4.8: Wire SqliteSaver into `_build_run_graph` and `graph.invoke`
+
+**Files:**
+- Modify: `src/trace/runtime/engine.py`
+- Create test: `tests/unit/runtime/test_checkpointer.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+# tests/unit/runtime/test_checkpointer.py
+from pathlib import Path
+from unittest.mock import patch
+from trace.runtime.engine import TraceRuntime
+
+
+def test_state_sqlite_created_after_run(tmp_path, monkeypatch):
+    runtime = TraceRuntime(output_root=tmp_path)
+
+    def _stub(**kwargs):
+        return {
+            "status": "completed",
+            "artifact": {"intent": "x", "node_groups": [], "logical_constraints": [], "physical_constraints": []},
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "retry_history": [], "repair_history": [], "events": [], "support_files": {},
+        }
+
+    monkeypatch.setattr("trace.runtime.engine.run_ground_stage", _stub)
+    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", _stub)
+    monkeypatch.setattr("trace.runtime.engine.run_physical_stage", _stub)
+
+    runtime.run(intent="x", run_id="ckpt-001")
+    assert (tmp_path / "ckpt-001" / "state.sqlite").exists()
+
+
+def test_resume_picks_up_from_sqlite_when_present(tmp_path, monkeypatch):
+    # Build a complete run with sqlite present, then resume from logical.
+    runtime = TraceRuntime(output_root=tmp_path)
+
+    def _ground(**kwargs):
+        return {
+            "status": "completed",
+            "artifact": {"intent": "x", "node_groups": [], "logical_constraints": [], "physical_constraints": []},
+            "evaluation_summary": {"ok": True, "issues": []},
+            "attempts_used": 1,
+            "messages": [], "tool_journal": [], "retry_history": [], "events": [], "support_files": {},
+        }
+
+    monkeypatch.setattr("trace.runtime.engine.run_ground_stage", _ground)
+    # Make logical fail so resume has work to do
+    def _logical_fail(**kwargs):
+        raise RuntimeError("synthetic failure for resume test")
+
+    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", _logical_fail)
+    runtime.run(intent="x", run_id="resume-base")
+
+    sqlite_path = tmp_path / "resume-base" / "state.sqlite"
+    assert sqlite_path.exists(), "sqlite must exist after a failed run for resume to use it"
+```
+
+- [ ] **Step 2: Run tests to verify fail**
+
+Run: `pytest tests/unit/runtime/test_checkpointer.py -v`
+Expected: FAIL.
+
+- [ ] **Step 3: Wire SqliteSaver**
+
+In `src/trace/runtime/engine.py`:
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+
+class TraceRuntime:
+    # ... existing __init__ ...
+
+    def _checkpointer_for(self, run_id: str) -> SqliteSaver:
+        run_root = self.storage.root / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        sqlite_path = run_root / "state.sqlite"
+        return SqliteSaver.from_conn_string(str(sqlite_path))
+
+    def _build_run_graph(self, *, entry_stage: str = "ground", checkpointer: SqliteSaver | None = None):
+        if entry_stage not in RUN_STAGE_ORDER:
+            raise ValueError(f"unsupported run graph entry stage: {entry_stage}")
+        graph = StateGraph(RunState)
+        graph.add_node("ground", self._run_ground)
+        graph.add_node("logical", self._run_logical)
+        graph.add_node("physical", self._run_physical)
+        graph.add_node("finalize", self._finalize)
+        graph.set_entry_point(entry_stage)
+        graph.add_edge("finalize", END)
+        return graph.compile(checkpointer=checkpointer)
+
+    def run(self, intent: str, run_id: str | None = None) -> dict[str, Any]:
+        resolved_run_id = run_id or uuid4().hex[:8]
+        initial: RunState = {
+            "run_id": resolved_run_id,
+            "intent": intent,
+            "status": "running",
+            "current_stage": "ground",
+            "artifacts": {},
+            "stage_reports": {},
+            "attempt_counters": {},
+            "support_files": {},
+            "events": [{"type": "run.started"}],
+            "escalation_history": [],
+            "error": None,
+            "config_snapshot": self._config_snapshot(),
+        }
+        self.storage.initialize_run(run_id=resolved_run_id, run_payload=initial)
+        with self._checkpointer_for(resolved_run_id) as checkpointer:
+            with self.observer.root_run(run_id=resolved_run_id, intent=intent):
+                graph = self._build_run_graph(checkpointer=checkpointer)
+                final_state = graph.invoke(
+                    initial,
+                    config={"configurable": {"thread_id": resolved_run_id}},
+                )
+        self.storage.write_run_state(run_id=resolved_run_id, run_payload=final_state)
+        self.storage.append_run_events(run_id=resolved_run_id, events=final_state.get("events", []))
+        return final_state
+```
+
+(Note: `SqliteSaver.from_conn_string(...)` is a context manager in current versions; wrap the run in `with ... as checkpointer:`. Verify against the installed version.)
+
+- [ ] **Step 4: Update `resume(...)` to prefer sqlite**
+
+In `resume(...)`:
+
+```python
+def resume(
+    self,
+    run_id: str,
+    *,
+    from_stage: str,
+    new_run_id: str | None = None,
+    in_place: bool = False,
+) -> dict[str, Any]:
+    resume_stage = _normalize_resume_stage(from_stage)
+    if in_place and new_run_id is not None:
+        raise ValueError("new_run_id cannot be used with in_place resume")
+    sqlite_path = self.storage.root / run_id / "state.sqlite"
+
+    target_run_id = run_id if in_place else new_run_id or self._next_resume_run_id(run_id, resume_stage)
+    if not in_place and target_run_id == run_id:
+        raise ValueError("new_run_id must differ from source run_id unless in_place=True")
+
+    sqlite_usable = in_place and sqlite_path.exists()
+
+    if sqlite_usable:
+        return self._resume_via_sqlite(
+            source_run_id=run_id,
+            target_run_id=target_run_id,
+            resume_stage=resume_stage,
+        )
+    return self._resume_via_run_storage(
+        source_run_id=run_id,
+        target_run_id=target_run_id,
+        resume_stage=resume_stage,
+        in_place=in_place,
+    )
+
+
+def _resume_via_sqlite(self, *, source_run_id: str, target_run_id: str, resume_stage: str) -> dict[str, Any]:
+    source_state = self.storage.read_run_state(source_run_id)
+    intent = str(source_state.get("intent") or "")
+    with self._checkpointer_for(target_run_id) as checkpointer:
+        graph = self._build_run_graph(entry_stage=resume_stage, checkpointer=checkpointer)
+        with self.observer.root_run(run_id=target_run_id, intent=intent):
+            history = list(graph.get_state_history({"configurable": {"thread_id": source_run_id}}))
+            target_checkpoint = None
+            for snapshot in history:
+                state_dict = snapshot.values if isinstance(snapshot.values, dict) else {}
+                if state_dict.get("current_stage") == resume_stage:
+                    target_checkpoint = snapshot
+                    break
+            if target_checkpoint is None:
+                raise ValueError(
+                    f"sqlite checkpoint for stage {resume_stage!r} not found in {source_run_id!r}"
+                )
+            final_state = graph.invoke(
+                None,
+                config={"configurable": {"thread_id": source_run_id, "checkpoint_id": target_checkpoint.config["configurable"].get("checkpoint_id")}},
+            )
+    self.storage.write_run_state(run_id=target_run_id, run_payload=final_state)
+    return final_state
+
+
+def _resume_via_run_storage(self, *, source_run_id: str, target_run_id: str, resume_stage: str, in_place: bool) -> dict[str, Any]:
+    # ... existing logic moved here verbatim, wrapped with _checkpointer_for(target_run_id) so the new run still gets a fresh sqlite ...
+    source_state = self.storage.read_run_state(source_run_id)
+    reused_stages = list(REQUIRED_RESUME_ARTIFACTS[resume_stage])
+    artifacts = self._load_resume_artifacts(source_run_id=source_run_id, from_stage=resume_stage)
+    intent = str(source_state.get("intent") or "")
+    initial = {
+        "run_id": target_run_id,
+        "intent": intent,
+        "status": "running",
+        "current_stage": resume_stage,
+        "artifacts": artifacts,
+        "stage_reports": {},
+        "attempt_counters": {},
+        "support_files": self._load_resume_support_files(source_run_id=source_run_id, from_stage=resume_stage),
+        "events": [{"type": "run.resumed", "source_run_id": source_run_id, "from_stage": resume_stage, "target_run_id": target_run_id, "reused_stages": reused_stages}],
+        "escalation_history": [],
+        "error": None,
+        "config_snapshot": self._config_snapshot(),
+        "resume": {"source_run_id": source_run_id, "from_stage": resume_stage, "reused_stages": reused_stages},
+    }
+    self.storage.initialize_run(run_id=target_run_id, run_payload=initial)
+    if not in_place:
+        for stage_id in reused_stages:
+            self.storage.copy_stage_snapshot(source_run_id=source_run_id, target_run_id=target_run_id, stage_id=stage_id)
+    with self._checkpointer_for(target_run_id) as checkpointer:
+        with self.observer.root_run(run_id=target_run_id, intent=intent):
+            graph = self._build_run_graph(entry_stage=resume_stage, checkpointer=checkpointer)
+            final_state = graph.invoke(initial, config={"configurable": {"thread_id": target_run_id}})
+    self.storage.write_run_state(run_id=target_run_id, run_payload=final_state)
+    self.storage.append_run_events(run_id=target_run_id, events=final_state.get("events", []))
+    return final_state
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `pytest tests/unit/runtime/test_checkpointer.py tests/integration/test_runtime_pipeline.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/trace/runtime/engine.py tests/unit/runtime/test_checkpointer.py
+git commit -m "feat(runtime): wire SqliteSaver checkpointer with RunStorage dual-track resume"
+```
+
+### Task 4.9: README + docs update
+
+**Files:**
+- Modify: `README.md`
+
+- [ ] **Step 1: Locate the "从阶段恢复" section**
+
+Run: `rg -n "从阶段恢复|resume|Resume" README.md`
+Capture surrounding context.
+
+- [ ] **Step 2: Append the SqliteSaver + escalation paragraph**
+
+After the existing resume description, add:
+
+```markdown
+### 状态持久化与恢复策略
+
+每次 `trace run` 会在 `runs/<run_id>/state.sqlite` 落地一份 LangGraph 状态 (Checkpointer)；
+`runs/<run_id>/run.json` 与 `<stage>/` 子目录仍作为人类可读快照保留。
+
+恢复时：
+- `--in-place` 模式下，如果 sqlite 存在则从最近的 stage checkpoint 继续（包括中间未完成的 attempt）；
+- `--new-run-id <id>` 模式（默认）下，始终走 `RunStorage` 路径：把上一 run 的 stage 快照拷贝进新 `runs/<new_id>/` 目录后重新跑，并在新目录里建立自己的 sqlite。
+
+### Escalation 反馈通道
+
+logical / physical stage 在遇到 `*.escalation.*` 类 issue 时不会进入 repair，而是把
+`escalation_report` 回流给 ground，由 ground 重新评估 constraints。计数器
+`attempt_counters.escalation` 上限为 2 次；超出则整体失败。
+若 ground 判断 `unsolvable=true`，run 直接以 `status="unsolvable"` 终止并提示用户检查 intent。
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add README.md
+git commit -m "docs: describe SqliteSaver resume and escalation channel"
+```
+
+### Task 4.10: Final verification + demo smoke
+
+- [ ] **Step 1: Full unit + integration suite**
+
+Run: `pytest -q`
+Expected: all green.
+
+- [ ] **Step 2: Two demo smokes**
+
+```powershell
+$env:LANGSMITH_TRACING="false"
+trace run tests/demo/demo.md --run-id pr4-smoke-001 --output-root runs
+```
+
+Expected:
+- Run completes.
+- `runs/pr4-smoke-001/state.sqlite` exists.
+- `runs/pr4-smoke-001/run.json` contains `escalation_history: []` (since this demo doesn't escalate).
+- `runs/pr4-smoke-001/events.jsonl` contains a `run.completed` entry.
+
+Then resume:
+
+```powershell
+trace resume pr4-smoke-001 --from physical --in-place
+```
+
+Expected: resume picks up from sqlite (logs say "sqlite checkpoint found") and re-runs physical.
+
+- [ ] **Step 3: Synthesized escalation smoke**
+
+Author a minimal `tests/demo/escalation_demo.md` whose `intent` deliberately conflicts (e.g., "Build a network with two firewalls but no firewall capable image in catalog"), then:
+
+```powershell
+trace run tests/demo/escalation_demo.md --run-id pr4-esc-001 --output-root runs
+```
+
+Expected: `runs/pr4-esc-001/run.json` shows non-empty `escalation_history`; final `status` is either `completed` (ground revised successfully) or `unsolvable` (ground gave up).
+
+- [ ] **Step 4: Branch / PR**
+
+Open PR titled `feat: PR4 SqliteSaver checkpointer + ground escalation reverse channel`. Reference spec modules C3 + G. List the eight original problems and which PR addressed each in the PR description.
+
+PR4 chunk done.
+
+---
+
+## Plan finalization
+
+All four chunks (PR1 / PR2 / PR3 / PR4) are now in this document. Execution order is strict — PR2 builds on PR1's ledger shape; PR3 builds on PR2's reducer-style ledger writes (the Chunk 2 tasks intentionally land manual `[*prior, entry]` patterns that PR3 strips); PR4 builds on PR3's `Command` routing and `escalation_history` field. Do not interleave.
+
+Run order after each chunk lands on the feature branch:
+
+1. `pytest -q` — entire suite green.
+2. Demo smoke (PowerShell shown):
+
+   ```powershell
+   $env:LANGSMITH_TRACING="false"
+   trace run tests/demo/demo.md --run-id chunk-N-smoke --output-root runs
+   ```
+
+3. Open PR. Reference the spec module(s) covered by the chunk in the PR body and link this plan file.
+
+Reviewer guidance per chunk:
+
+- **PR1** — focus on prompt diff and tool surface; verify no API-listing leakage in `src/trace/stages/*/prompts`.
+- **PR2** — focus on `_derive_produced_files` correctness (especially mutation/execute pairing edge cases enumerated in spec NI-2) and `diff` view semantics.
+- **PR3** — focus on reducer behavior across nodes; check that no node still does `[*prev, ...]`; verify `Command.goto` covers every previous `next_action` value.
+- **PR4** — focus on (a) sqlite-aware resume path correctness and (b) escalation counter precedence; check `_handle_stage_escalation` for off-by-one on the cap.
+
+Plan complete.
