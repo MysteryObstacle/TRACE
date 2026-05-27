@@ -67,4 +67,4 @@ def test_repair_node_passes_seeded_index(monkeypatch):
             return {"messages": []}
 
     repair_node(state, FakeClient())
-    assert captured["mutation_index_seed"] == 3
+    assert captured["mutation_index_seed"] == 4

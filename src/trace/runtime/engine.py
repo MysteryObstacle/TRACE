@@ -12,6 +12,7 @@ from langgraph.types import Command
 from trace.config.settings import TraceSettings, load_settings
 from trace.observability.tracing import TraceObserver
 from trace.runtime.role_client import LangChainRoleClient, RoleClient
+from trace.stages.common import stage_history_name
 from trace.stages.ground import run_ground_stage
 from trace.stages.ground.schemas import GroundArtifact
 from trace.stages.logical import run_logical_stage
@@ -158,7 +159,12 @@ class TraceRuntime:
             partial["unsolvable_notes"] = result.get("unsolvable_notes", [])
             return Command(goto=END, update=partial)
 
-        partial = self._merge_stage_result(state, "ground", result)
+        partial = self._merge_stage_result(
+            state,
+            "ground",
+            result,
+            snapshot_dir=self._ground_snapshot_dir(state, escalation_report),
+        )
         if escalation_report is not None:
             partial = {**partial, "escalation_report": None}
         return Command(goto="logical", update=partial)
@@ -210,16 +216,19 @@ class TraceRuntime:
     def _handle_stage_escalation(self, state: RunState, stage_id: str, result: dict[str, Any]) -> Command:
         escalation_counter = (state.get("attempt_counters") or {}).get("escalation", 0)
         escalation_report = result.get("escalation_report") or {}
+        new_counter = escalation_counter + 1
+        self._persist_escalation_snapshot(state, stage_id, result, counter=new_counter)
         payload: dict[str, Any] = {
-            "events": [{"type": f"{stage_id}.escalation_received", "stage": stage_id, "counter": escalation_counter + 1}],
+            "events": [{"type": f"{stage_id}.escalation_received", "stage": stage_id, "counter": new_counter}],
             "escalation_history": [{
                 "stage": stage_id,
-                "counter": escalation_counter + 1,
+                "counter": new_counter,
                 "report": escalation_report,
             }],
-            "attempt_counters": {**(state.get("attempt_counters") or {}), "escalation": escalation_counter + 1},
+            "attempt_counters": {**(state.get("attempt_counters") or {}), "escalation": new_counter},
+            "support_files": {**state.get("support_files", {}), **result.get("support_files", {})},
         }
-        if escalation_counter + 1 > ESCALATION_LIMIT:
+        if new_counter > ESCALATION_LIMIT:
             return Command(
                 goto=END,
                 update={
@@ -241,7 +250,14 @@ class TraceRuntime:
             },
         )
 
-    def _merge_stage_result(self, state: RunState, stage_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _merge_stage_result(
+        self,
+        state: RunState,
+        stage_id: str,
+        result: dict[str, Any],
+        *,
+        snapshot_dir: str | None = None,
+    ) -> dict[str, Any]:
         partial: dict[str, Any] = {
             "current_stage": stage_id,
             "artifacts": {**state.get("artifacts", {}), stage_id: result["artifact"]},
@@ -261,17 +277,55 @@ class TraceRuntime:
         self.storage.write_stage_snapshot(
             run_id=state["run_id"],
             stage_id=stage_id,
+            snapshot_dir=snapshot_dir,
             artifact=result["artifact"],
             evaluation=result["evaluation_summary"] or {"ok": True, "issues": []},
             summary={"attempts_used": result["attempts_used"]},
             messages=result["messages"],
             tool_journal=result["tool_journal"],
-            history_name=_stage_history_name(stage_id),
-            history_entries=result[_stage_history_name(stage_id)],
+            history_name=stage_history_name(stage_id),
+            history_entries=result[stage_history_name(stage_id)],
             events=result["events"],
             support_files=result.get("support_files", {}),
         )
         return partial
+
+    def _persist_escalation_snapshot(
+        self,
+        state: RunState,
+        stage_id: str,
+        result: dict[str, Any],
+        *,
+        counter: int,
+    ) -> None:
+        history_name = stage_history_name(stage_id)
+        evaluation = dict(result.get("evaluation_summary") or {"ok": False, "issues": []})
+        evaluation["escalated"] = True
+        self.storage.write_stage_snapshot(
+            run_id=state["run_id"],
+            stage_id=stage_id,
+            snapshot_dir=f"{stage_id}-escalation-{counter:03d}",
+            artifact=result.get("partial_artifact") or {},
+            evaluation=evaluation,
+            summary={
+                "attempts_used": result.get("attempts_used", 1),
+                "escalated": True,
+                "escalation_counter": counter,
+            },
+            messages=result.get("messages", []),
+            tool_journal=result.get("tool_journal", []),
+            history_name=history_name,
+            history_entries=result.get(history_name, []),
+            events=result.get("events", []),
+            support_files=result.get("support_files", {}),
+        )
+
+    @staticmethod
+    def _ground_snapshot_dir(state: RunState, escalation_report: dict[str, Any] | None) -> str | None:
+        if not escalation_report:
+            return None
+        counter = (state.get("attempt_counters") or {}).get("escalation", 0)
+        return f"ground-escalation-{counter:03d}"
 
     def _merge_stage_outcome(self, state: RunState, stage_id: str, result: dict[str, Any]) -> dict[str, Any]:
         partial: dict[str, Any] = {
@@ -309,7 +363,7 @@ class TraceRuntime:
             summary={"attempts_used": merged.get("attempt_counters", {}).get(stage_id, 0), "failed": True},
             messages=[],
             tool_journal=[],
-            history_name=_stage_history_name(stage_id),
+            history_name=stage_history_name(stage_id),
             history_entries=[],
             events=partial["events"],
             support_files={},
@@ -443,12 +497,6 @@ class TraceRuntime:
             "langsmith_enabled": self.settings.langsmith.enabled,
             "roles": {name: settings.model_dump(mode="json") for name, settings in self.settings.roles.items()},
         }
-
-
-def _stage_history_name(stage_id: str) -> str:
-    if stage_id == "ground":
-        return "retry_history"
-    return "repair_history"
 
 
 def _normalize_resume_stage(stage: str) -> str:

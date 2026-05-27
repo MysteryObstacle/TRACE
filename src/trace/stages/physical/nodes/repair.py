@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.repair_tools import StageRepairTools, _derive_produced_files
+from trace.stages.support_files import load_constraint_entries
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
@@ -21,7 +23,7 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
         support_files=state.get("support_files", {}),
         support_file_root=state.get("support_file_root"),
         logical_reference_graph=state["logical_artifact"]["graph"],
-        mutation_index_seed=len(prior_ledger) + 1,
+        mutation_index_seed=len(prior_ledger) + 2,
     )
     messages = _build_repair_messages(
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
@@ -29,7 +31,13 @@ def repair_node(state: PhysicalState, role_client) -> PhysicalState:
         evaluation_report=state["evaluation_report"],
         current_topology=repair_tools.inspect_graph(view="summary"),
         logical_topology=state["logical_artifact"]["graph"],
-        physical_constraints=state.get("ground_artifact", {}).get("physical_constraints", []),
+        physical_constraints=load_constraint_entries(
+            support_files=state.get("support_files", {}),
+            constraint_files=state["draft_artifact"].get("constraint_files", {})
+            or state.get("ground_artifact", {}).get("constraint_files", {}),
+            scope="physical",
+            default_path=PHYSICAL_CONSTRAINTS_PATH,
+        ),
         constraint_files=state["draft_artifact"].get("constraint_files", {}),
         checkpoint_files=state["draft_artifact"].get("checkpoint_files", {}),
         recent_repair_ledger=_summarize_recent_repair_ledger(prior_ledger),

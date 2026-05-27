@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, MutableMapping
+from typing import Any, Literal, Mapping, MutableMapping
 
 from pydantic import BaseModel
 
@@ -94,6 +94,36 @@ def merge_support_files(*states: MutableMapping[str, Any]) -> dict[str, str]:
         for relative_path, content in (state.get("support_files") or {}).items():
             merged[_safe_relative_path(str(relative_path))] = str(content)
     return merged
+
+
+def load_constraint_entries(
+    *,
+    support_files: Mapping[str, str],
+    constraint_files: Mapping[str, str],
+    scope: Literal["logical", "physical"],
+    default_path: str,
+) -> list[dict[str, Any]]:
+    relative_path = str(constraint_files.get(scope) or default_path)
+    raw = support_files.get(relative_path, "{}")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for constraint_id, fact in payload.items():
+        if not isinstance(fact, dict):
+            entries.append({"id": constraint_id})
+            continue
+        entry: dict[str, Any] = {"id": constraint_id}
+        if fact.get("kind") is not None:
+            entry["kind"] = fact["kind"]
+        if fact.get("statement") is not None:
+            entry["statement"] = fact["statement"]
+        entries.append(entry)
+    return entries
 
 
 def _safe_relative_path(relative_path: str) -> str:

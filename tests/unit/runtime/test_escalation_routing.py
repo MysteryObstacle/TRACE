@@ -13,8 +13,8 @@ def _runtime():
     return TraceRuntime(settings=settings, role_client=MagicMock(), output_root="runs/_tmp_escalation_test")
 
 
-def test_logical_escalated_routes_back_to_ground():
-    runtime = _runtime()
+def test_logical_escalated_routes_back_to_ground(tmp_path):
+    runtime = TraceRuntime(output_root=tmp_path)
     state = {
         "run_id": "test",
         "intent": "x",
@@ -45,6 +45,7 @@ def test_logical_escalated_routes_back_to_ground():
     assert result.goto == "ground"
     assert result.update["attempt_counters"]["escalation"] == 1
     assert len(result.update["escalation_history"]) == 1
+    assert (tmp_path / "test" / "logical-escalation-001" / "artifact.json").exists()
 
 
 def test_escalation_counter_cap_aborts_to_failed():
@@ -110,3 +111,36 @@ def test_ground_consumes_escalation_report_once():
         runtime._run_ground(state)
     assert "escalation_report" in captured_kwargs
     assert captured_kwargs["escalation_report"]["source_stage"] == "logical"
+
+
+def test_ground_reentry_writes_escalation_snapshot_dir(tmp_path):
+    runtime = TraceRuntime(output_root=tmp_path)
+    state = {
+        "run_id": "ground-esc",
+        "intent": "x",
+        "status": "running",
+        "artifacts": {},
+        "attempt_counters": {"escalation": 1},
+        "events": [],
+        "support_files": {},
+        "escalation_report": {"source_stage": "logical", "issues": []},
+    }
+    fake_result = {
+        "status": "completed",
+        "artifact": {
+            "node_groups": [{"type": "router", "members": ["R1"]}],
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
+        },
+        "evaluation_summary": {"ok": True, "issues": []},
+        "attempts_used": 1,
+        "messages": [],
+        "tool_journal": [],
+        "retry_history": [],
+        "events": [],
+        "support_files": {},
+    }
+
+    with patch("trace.runtime.engine.run_ground_stage", return_value=fake_result):
+        runtime._run_ground(state)
+
+    assert (tmp_path / "ground-esc" / "ground-escalation-001" / "artifact.json").exists()

@@ -71,8 +71,9 @@ class RunStorage:
         history_entries: list[dict[str, Any]],
         events: list[dict[str, Any]],
         support_files: dict[str, str] | None = None,
+        snapshot_dir: str | None = None,
     ) -> Path:
-        stage_root = self.root / run_id / stage_id
+        stage_root = self.root / run_id / (snapshot_dir or stage_id)
         stage_root.mkdir(parents=True, exist_ok=True)
         self._write_json(stage_root / "artifact.json", artifact)
         self._write_json(stage_root / "evaluation.json", evaluation)

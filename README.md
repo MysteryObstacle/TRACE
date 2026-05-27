@@ -27,12 +27,13 @@ TRACE 是一个面向网络拓扑意图建模的核心运行时重写版。当�
 - logical / physical author 会分别生成 `logical/checkpoints.py` 和 `physical/checkpoints.py`
 - `runs/<run_id>/` 完整快照落盘
 - LangSmith tracing 接线
+- LangGraph SqliteSaver checkpointer（`runs/<run_id>/state.sqlite`）与 RunStorage 双轨 resume
+- logical / physical escalation 回流 ground（`*.escalation.*` issue kinds）
 
 暂未实现或仍在收敛：
 
 - `translate` 阶段
 - 跨 run 长期记忆
-- LangGraph SqliteSaver checkpointer（`runs/<run_id>/state.sqlite`）与 RunStorage 双轨 resume
 - 前端可视化
 - 旧项目 `experiments/` 迁移
 

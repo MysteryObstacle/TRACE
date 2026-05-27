@@ -92,10 +92,14 @@ def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[
     raise RuntimeError(message)
 
 
-def _stage_history_name(stage_id: str) -> str:
+def stage_history_name(stage_id: str) -> str:
     if stage_id == "ground":
         return "retry_history"
     return "repair_history"
+
+
+def _stage_history_name(stage_id: str) -> str:
+    return stage_history_name(stage_id)
 
 
 def _format_context_value(value: Any) -> str:
