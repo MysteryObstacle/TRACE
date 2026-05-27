@@ -49,8 +49,8 @@ def test_physical_author_node_injects_tgraph_contract() -> None:
 
     assert messages[1]["role"] == "system"
     assert "[tgraph_contract]" in system_content
-    assert "[image_catalog]" in system_content
-    assert "img_pfsense" in system_content
+    assert "[image_catalog]" not in system_content
+    assert "img_pfsense" not in system_content
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
     assert "ground/physical_constraints.json" in human_content

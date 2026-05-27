@@ -13,7 +13,7 @@ from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
 from trace.stages.repair_tools import _FindImagesInput, _GetImageInput
 from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
-from trace.tools.images.catalog import find_images, get_image, image_catalog_prompt
+from trace.tools.images.catalog import find_images, get_image
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "author.md"
@@ -35,10 +35,7 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
             "constraint_files": state.get("draft_artifact", {}).get("constraint_files", {})
             or ground_artifact.get("constraint_files", {"physical": DEFAULT_CONSTRAINT_PATH}),
         },
-        system_context_sections={
-            "tgraph_contract": load_tgraph_contract_for("physical_author"),
-            "image_catalog": image_catalog_prompt(),
-        },
+        system_context_sections={"tgraph_contract": load_tgraph_contract_for("physical_author")},
     )
     agent_result = role_client.invoke_agent(
         role_name="physical_author",

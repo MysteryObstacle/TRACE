@@ -94,8 +94,8 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
     }.issubset(tool_names)
     assert "write_checkpoint_file" not in tool_names
     assert "[tgraph_contract]" in system_content
-    assert "[image_catalog]" in system_content
-    assert "img_pfsense" in system_content
+    assert "[image_catalog]" not in system_content
+    assert "img_pfsense" not in system_content
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
     assert "[working_graph]" not in human_content

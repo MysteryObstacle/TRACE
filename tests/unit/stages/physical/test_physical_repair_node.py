@@ -132,8 +132,8 @@ def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
 
     assert messages[1]["role"] == "system"
     assert "TGraph contract for this repair round" in messages[1]["content"]
-    assert "Image catalog for this repair round" in messages[2]["content"]
-    assert "img_pfsense" in messages[2]["content"]
+    assert "Image catalog for this repair round" not in (messages[2]["content"] if len(messages) > 2 else "")
+    assert all("img_pfsense" not in msg.get("content", "") for msg in messages if msg.get("role") == "human")
     assert "[tgraph_contract]" not in human_contents
     assert "[image_catalog]" not in human_contents
     assert "[logical_topology]" in human_contents

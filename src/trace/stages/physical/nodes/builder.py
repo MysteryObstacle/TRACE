@@ -7,7 +7,6 @@ from trace.stages.common import build_messages
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.repair_tools import StageRepairTools
-from trace.tools.images.catalog import image_catalog_prompt
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "builder.md"
@@ -32,10 +31,7 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
             "constraint_files": artifact.get("constraint_files", {}),
             "checkpoint_files": artifact.get("checkpoint_files", {}),
         },
-        system_context_sections={
-            "tgraph_contract": load_tgraph_contract_for("physical_builder"),
-            "image_catalog": image_catalog_prompt(),
-        },
+        system_context_sections={"tgraph_contract": load_tgraph_contract_for("physical_builder")},
     )
     agent_result = role_client.invoke_agent(
         role_name="physical_builder",
