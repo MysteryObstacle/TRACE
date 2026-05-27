@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,27 @@ class RunStorage:
         self._write_json(run_root / "run.json", run_payload)
         return run_root
 
+    def read_run_state(self, run_id: str) -> dict[str, Any]:
+        return self._read_json(self.root / run_id / "run.json")
+
+    def read_stage_artifact(self, run_id: str, stage_id: str) -> dict[str, Any]:
+        return self._read_json(self.root / run_id / stage_id / "artifact.json")
+
+    def stage_snapshot_exists(self, run_id: str, stage_id: str) -> bool:
+        return (self.root / run_id / stage_id / "artifact.json").exists()
+
+    def run_exists(self, run_id: str) -> bool:
+        return (self.root / run_id).exists()
+
+    def copy_stage_snapshot(self, *, source_run_id: str, target_run_id: str, stage_id: str) -> Path:
+        source = self.root / source_run_id / stage_id
+        target = self.root / target_run_id / stage_id
+        if not (source / "artifact.json").exists():
+            raise FileNotFoundError(source / "artifact.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        return target
+
     def append_run_events(self, *, run_id: str, events: list[dict[str, Any]]) -> Path:
         run_root = self.root / run_id
         run_root.mkdir(parents=True, exist_ok=True)
@@ -48,6 +70,7 @@ class RunStorage:
         history_name: str,
         history_entries: list[dict[str, Any]],
         events: list[dict[str, Any]],
+        support_files: dict[str, str] | None = None,
     ) -> Path:
         stage_root = self.root / run_id / stage_id
         stage_root.mkdir(parents=True, exist_ok=True)
@@ -58,11 +81,23 @@ class RunStorage:
         self._write_json(stage_root / "tool_journal.json", tool_journal)
         self._write_json(stage_root / f"{history_name}.json", history_entries)
         self._write_jsonl(stage_root / "events.jsonl", events)
+        for relative_path, content in (support_files or {}).items():
+            path = _safe_relative_support_path(relative_path)
+            support_path = self.root / run_id / path
+            support_path.parent.mkdir(parents=True, exist_ok=True)
+            support_path.write_text(str(content), encoding="utf-8")
         return stage_root
 
     @staticmethod
     def _write_json(path: Path, payload: Any) -> None:
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default), encoding="utf-8")
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, Any]:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected JSON object in {path}")
+        return payload
 
     @staticmethod
     def _write_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
@@ -78,3 +113,11 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
+def _safe_relative_support_path(relative_path: str) -> Path:
+    raw = str(relative_path or "").replace("\\", "/").strip()
+    path = Path(raw)
+    if not raw or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"unsafe support file path: {relative_path!r}")
+    return path

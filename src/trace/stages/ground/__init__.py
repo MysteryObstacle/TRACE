@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tempfile import TemporaryDirectory
+
 from langgraph.graph import END, StateGraph
 
 from trace.config.settings import TraceSettings
@@ -13,15 +15,18 @@ from trace.stages.ground.state import GroundState
 
 def run_ground_stage(*, intent: str, role_client, settings: TraceSettings) -> dict[str, Any]:
     graph = _build_ground_graph(role_client=role_client, settings=settings)
-    initial: GroundState = {
-        "intent": intent,
-        "attempt": 1,
-        "max_attempts": settings.roles["ground_evaluator"].max_attempts,
-        "status": "preparing",
-        "retry_history": [],
-        "events": [],
-    }
-    final_state = graph.invoke(initial)
+    with TemporaryDirectory(prefix="trace-ground-") as support_root:
+        initial: GroundState = {
+            "intent": intent,
+            "attempt": 1,
+            "max_attempts": settings.roles["ground_evaluator"].max_attempts,
+            "status": "preparing",
+            "retry_history": [],
+            "events": [],
+            "support_files": {},
+            "support_file_root": support_root,
+        }
+        final_state = graph.invoke(initial)
     return require_stage_result(stage_id="ground", final_state=final_state)
 
 

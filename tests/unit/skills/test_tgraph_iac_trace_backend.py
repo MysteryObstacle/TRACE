@@ -32,6 +32,13 @@ def test_resolve_trace_root_inserts_src_and_imports_project_trace(monkeypatch):
     assert loaded_file.name == "__init__.py"
 
 
+def test_infer_artifact_stage_reads_graph_stage():
+    module = _load_trace_backend()
+
+    assert module.infer_artifact_stage({"graph": {"stage": "logical", "nodes": [], "links": []}}) == "logical"
+    assert module.infer_artifact_stage({"graph": {"stage": "physical", "nodes": [], "links": []}}) == "physical"
+
+
 def test_resolve_backend_reports_missing_trace_root(tmp_path):
     module = _load_trace_backend()
 

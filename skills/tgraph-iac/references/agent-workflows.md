@@ -5,7 +5,7 @@
 1. Create a logical or physical artifact envelope.
 2. Add nodes with `ensure_node`.
 3. Connect topology with `ensure_link`.
-4. Add grounded intent checks with `ensure_checkpoint`.
+4. Write grounded intent checks into the referenced checkpoint file.
 5. Validate.
 6. Export.
 
@@ -13,8 +13,8 @@
 
 1. Read the current validation report.
 2. Inspect only the needed graph region.
-3. Decide whether the issue belongs to graph, checkpoint, or validator script.
-4. Apply one coherent patch.
+3. Decide whether the issue belongs to graph structure or checkpoint code.
+4. Apply one coherent graph update or checkpoint-file edit.
 5. Validate.
 6. Iterate only from new `rejected_ops` and `validation.issues`.
 

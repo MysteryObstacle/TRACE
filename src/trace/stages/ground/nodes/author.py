@@ -30,29 +30,26 @@ def author_node(state: GroundState, role_client) -> GroundState:
 
     if revising:
         context_sections["evaluation_feedback"] = report
+        context_sections["evaluation_issues"] = report.get("issues", []) if isinstance(report, dict) else []
+        context_sections["evaluation_notes"] = report.get("notes", []) if isinstance(report, dict) else []
         context_sections["previous_artifact"] = state.get("draft_artifact")
         task = (
-            "当前任务模式：`feedback_revision`。\n"
-            "根据 `evaluation_feedback` 修订 `previous_artifact`，输出包含所有字段的完整 "
-            "`GroundDraftArtifact`，禁止输出 delta patch。\n"
-            "如果 evaluation_feedback 包含非空 optimizer_brief，优先使用 optimizer_brief "
-            "作为修订建议；但不得盲目用 optimizer_brief 替换 previous_artifact。\n"
-            "只修改 feedback 指出的错误、遗漏、冲突或不清晰事实。\n"
-            "保留 previous_artifact 中未被 feedback 影响的 node_groups、logical_constraints "
-            "和 physical_constraints。\n"
-            "禁止重新设计整个 artifact，除非 evaluation_feedback 明确要求。"
+            "Current task mode: `feedback_revision`.\n"
+            "Revise `previous_artifact` according to `evaluation_issues` and `evaluation_notes`. "
+            "Return a complete `GroundDraftArtifact`, not a delta patch.\n"
+            "Change only the facts called out as wrong, missing, conflicting, or unclear.\n"
+            "Preserve unaffected node_groups, logical_constraints, and physical_constraints."
         )
     else:
         task = (
-            "当前任务模式：`initial_draft`。\n"
-            "根据 `intent` 生成完整 `GroundDraftArtifact`。\n"
-            "如果 intent 明确给出 fixed node IDs、CIDRs、link chains、fixed addresses "
-            "或 node types，必须保守镜像这些固定事实，不得改名、合并或省略。\n"
-            "如果 intent 是开放式设计需求，则生成最小、合理、可部署的 canonical "
-            "node_groups、logical_constraints 和 physical_constraints。\n"
-            "physical_constraints 只能来自两类证据：用户显式的 deployment、image、runtime、flavor "
-            "或 resource 要求；以及开放式 archetype 中由 author 主动引入的 functional role nodes。"
-            "不要仅根据节点名称推断 physical constraint。"
+            "Current task mode: `initial_draft`.\n"
+            "Generate a complete `GroundDraftArtifact` from `intent`.\n"
+            "If the intent gives fixed node ids, CIDRs, link chains, fixed addresses, or node types, preserve those "
+            "facts exactly without renaming, merging, or omitting them.\n"
+            "If the intent is open-ended, produce a small, reasonable, deployable canonical set of node_groups, "
+            "logical_constraints, and physical_constraints.\n"
+            "Only create physical_constraints from explicit deployment/image/runtime/flavor/resource requirements or "
+            "from functional role nodes that you intentionally introduce for an open-ended archetype."
         )
 
     messages, artifact = invoke_role(

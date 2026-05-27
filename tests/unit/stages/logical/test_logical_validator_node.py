@@ -1,40 +1,25 @@
 from trace.stages.logical.nodes.validator import validator_node
 
 
-def test_logical_validator_routes_f4_authored_check_failures_to_repair():
+def test_logical_validator_routes_f4_authored_check_failures_to_repair(tmp_path) -> None:
     state = {
-        "author_output": {
-            "logical_checkpoints": [
-                {
-                    "id": "cp1",
-                    "func": "connect_nodes",
-                    "description": "A connect B",
-                    "constraint_ids": ["lc1"],
-                    "args": {"node_a": "A", "node_b": "B"},
-                }
-            ],
-            "logical_validator_script": None,
-        },
         "draft_artifact": {
-            "logical_checkpoints": [
-                {
-                    "id": "cp1",
-                    "func": "connect_nodes",
-                    "description": "A connect B",
-                    "constraint_ids": ["lc1"],
-                    "args": {"node_a": "A", "node_b": "B"},
-                }
-            ],
-            "logical_validator_script": None,
-            "tgraph_logical": {
-                "profile": "logical.v1",
+            "constraint_files": {"logical": "logical/constraints.json"},
+            "checkpoint_files": {"logical": "logical/checkpoints.py"},
+            "graph": {
+                "stage": "logical",
                 "nodes": [
-                    {"id": "A", "type": "router", "label": "A", "ports": [], "image": None, "flavor": None},
-                    {"id": "B", "type": "router", "label": "B", "ports": [], "image": None, "flavor": None},
+                    {"id": "A", "type": "router", "label": "A", "ports": []},
+                    {"id": "B", "type": "router", "label": "B", "ports": []},
                 ],
                 "links": [],
             },
         },
+        "support_files": {
+            "logical/constraints.json": '{"lc1": {"kind": "logical.topology.direct", "statement": "A must connect to B."}}',
+            "logical/checkpoints.py": 'def check_lc1(tgraph):\n    return tgraph.check_direct_link("A", "B")\n',
+        },
+        "support_file_root": str(tmp_path),
         "attempt": 1,
         "max_attempts": 3,
     }
@@ -45,37 +30,22 @@ def test_logical_validator_routes_f4_authored_check_failures_to_repair():
     assert result["next_action"] == "repair"
 
 
-def test_logical_validator_routes_checkpoint_execution_errors_to_repair():
+def test_logical_validator_routes_checkpoint_execution_errors_to_repair(tmp_path) -> None:
     state = {
-        "author_output": {
-            "logical_checkpoints": [
-                {
-                    "id": "cp1",
-                    "func": "broken_check",
-                    "description": "broken custom check",
-                    "constraint_ids": ["lc1"],
-                    "args": {},
-                }
-            ],
-            "logical_validator_script": "def broken_check(tgraph, **kwargs):\n    raise KeyError('boom')\n",
-        },
         "draft_artifact": {
-            "logical_checkpoints": [
-                {
-                    "id": "cp1",
-                    "func": "broken_check",
-                    "description": "broken custom check",
-                    "constraint_ids": ["lc1"],
-                    "args": {},
-                }
-            ],
-            "logical_validator_script": "def broken_check(tgraph, **kwargs):\n    raise KeyError('boom')\n",
-            "tgraph_logical": {
-                "profile": "logical.v1",
-                "nodes": [{"id": "A", "type": "router", "label": "A", "ports": [], "image": None, "flavor": None}],
+            "constraint_files": {"logical": "logical/constraints.json"},
+            "checkpoint_files": {"logical": "logical/checkpoints.py"},
+            "graph": {
+                "stage": "logical",
+                "nodes": [{"id": "A", "type": "router", "label": "A", "ports": []}],
                 "links": [],
             },
         },
+        "support_files": {
+            "logical/constraints.json": '{"lc1": {"kind": "logical.custom", "statement": "A custom logical fact."}}',
+            "logical/checkpoints.py": "def check_lc1(tgraph):\n    raise KeyError('boom')\n",
+        },
+        "support_file_root": str(tmp_path),
         "attempt": 1,
         "max_attempts": 3,
     }
@@ -83,5 +53,5 @@ def test_logical_validator_routes_checkpoint_execution_errors_to_repair():
     result = validator_node(state)
 
     assert result["evaluation_report"]["ok"] is False
-    assert {item["code"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint_function_runtime_error"}
+    assert {item["details"]["issue_kind"] for item in result["evaluation_report"]["issues"]} >= {"checkpoint.execution.exception"}
     assert result["next_action"] == "repair"

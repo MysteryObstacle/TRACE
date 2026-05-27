@@ -1,24 +1,35 @@
+from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
 from trace.stages.physical.nodes.author import author_node
 
 
-def test_physical_author_node_injects_tgraph_contract():
+def test_physical_author_node_injects_tgraph_contract() -> None:
     state = {
-        "logical_artifact": {"tgraph_logical": {"profile": "logical.v1", "nodes": [], "links": []}},
+        "logical_artifact": {"graph": {"stage": "logical", "nodes": [], "links": []}, "checkpoint_files": {}},
         "ground_artifact": {
             "node_groups": [{"type": "computer", "members": ["PLC1"]}],
-            "logical_constraints": [],
-            "physical_constraints": [{"id": "pc1", "statement": "PLC1 must have deployable metadata"}],
+            "constraint_files": {"physical": PHYSICAL_CONSTRAINTS_PATH},
+        },
+        "support_files": {
+            PHYSICAL_CONSTRAINTS_PATH: (
+                '{"pc1": {"kind": "physical.custom", "statement": "PLC1 must have deployable metadata."}}'
+            ),
         },
         "events": [],
     }
 
     class FakeRoleClient:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = []
 
-        def invoke_structured(self, *, role_name, messages, schema):
-            self.calls.append({"role_name": role_name, "messages": messages})
-            return {"physical_checkpoints": [], "physical_validator_script": None}
+        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+            self.calls.append({"role_name": role_name, "messages": messages, "tool_names": [_tool_name(tool) for tool in tools]})
+            bound = {_tool_name(tool): tool for tool in tools}
+            _call_tool(
+                bound["write_checkpoint_file"],
+                {"content": "def check_pc1(tgraph):\n    return []\n"},
+            )
+            _call_tool(bound["validate_checkpoint_file"])
+            return {"messages": [{"role": "assistant", "content": "done"}]}
 
     client = FakeRoleClient()
     result = author_node(state, client)
@@ -32,5 +43,17 @@ def test_physical_author_node_injects_tgraph_contract():
     assert "img_pfsense" in system_content
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
-    assert result["author_output"]["physical_checkpoints"] == []
-    assert result["author_output"]["physical_validator_script"] is None
+    assert "ground/physical_constraints.json" in human_content
+    assert "physical/constraints.json" not in human_content
+    assert result["author_output"] == {"checkpoint_files": {"physical": "physical/checkpoints.py"}}
+    assert "physical/checkpoints.py" in result["support_files"]
+
+
+def _tool_name(tool) -> str:
+    return getattr(tool, "name", "")
+
+
+def _call_tool(tool, payload=None):
+    if hasattr(tool, "invoke"):
+        return tool.invoke(payload or {})
+    return tool(**(payload or {}))

@@ -28,3 +28,7 @@ def _bootstrap_trace_package() -> ModuleType:
 
 _bootstrap_trace_package()
 app = import_module("trace.main").app
+
+
+if __name__ == "__main__":
+    app()

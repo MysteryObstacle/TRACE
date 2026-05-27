@@ -1,97 +1,113 @@
 import json
 
-from trace.stages.physical.nodes import repair as repair_module
 from trace.stages.physical.nodes.repair import repair_node
 
 
-def test_physical_repair_node_uses_agent_tools_and_writes_back_artifact():
+def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(tmp_path):
     state = {
         "logical_artifact": {
-            "tgraph_logical": {
-                "profile": "logical.v1",
-                "nodes": [
-                    {"id": "PLC1", "type": "computer", "label": "PLC1", "ports": [], "image": None, "flavor": None},
-                ],
-                "links": [],
-            }
-        },
-        "draft_artifact": {
-            "physical_checkpoints": [
-                {
-                    "id": "pc1",
-                    "func": "broken_check",
-                    "description": "old description",
-                    "constraint_ids": ["p1"],
-                    "args": {"node_id": "PLC1"},
-                }
-            ],
-            "physical_validator_script": "def broken_check(tgraph, **kwargs):\n    raise KeyError('boom')\n",
-            "tgraph_physical": {
-                "profile": "taal.default.v1",
-                "nodes": [
-                    {"id": "PLC1", "type": "computer", "label": "PLC1", "ports": [], "image": None, "flavor": None},
-                ],
+            "graph": {
+                "stage": "logical",
+                "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}],
                 "links": [],
             },
+            "checkpoint_files": {},
         },
-        "evaluation_report": {"ok": False, "issues": [{"code": "checkpoint_execution_error", "severity": "error", "targets": ["checkpoint:pc1"]}]},
+        "draft_artifact": {
+            "graph": {
+                "stage": "physical",
+                "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}],
+                "links": [],
+            },
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+        "support_files": {},
+        "support_file_root": str(tmp_path),
+        "evaluation_report": {"ok": False, "issues": [{"details": {"issue_kind": "missing_required_node_field"}}]},
         "attempt": 0,
         "repair_history": [],
         "events": [],
     }
 
     class FakeRoleClient:
+        def __init__(self):
+            self.calls = []
+
         def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
-            bound = {_tool_name(tool): tool for tool in tools}
-            _call_tool(
-                bound["update_node"],
+            self.calls.append(
                 {
-                    "node_id": "PLC1",
-                    "image": {"id": "img1", "name": "OpenPLC"},
-                    "flavor": {"vcpu": 1, "ram": 512, "disk": 4},
-                },
+                    "role_name": role_name,
+                    "messages": messages,
+                    "tool_names": [_tool_name(tool) for tool in tools],
+                }
             )
-            _call_tool(bound["update_checkpoint"], {"checkpoint_id": "pc1", "description": "patched"})
-            _call_tool(bound["replace_validator_script"], {"script": "def broken_check(tgraph, **kwargs):\n    return []\n"})
+            bound = {_tool_name(tool): tool for tool in tools}
+            write_payload = {
+                "path": "physical/mutations/attempt_1.py",
+                "content": (
+                    "def mutate(tgraph):\n"
+                    "    tgraph.set_image('PLC1', 'img_openplc', name='OpenPLC Runtime')\n"
+                    "    tgraph.set_flavor('PLC1', vcpu=1, ram=512, disk=4)\n"
+                ),
+            }
+            write_result = _call_tool(bound["write_mutation_file"], write_payload)
+            execute_payload = {"path": "physical/mutations/attempt_1.py", "validate": True}
+            execute_result = _call_tool(bound["execute_mutation_file"], execute_payload)
             return {
                 "messages": [
-                    {"type": "ai", "tool_calls": [{"id": "call1", "name": "update_node", "args": {"node_id": "PLC1"}}]},
-                    {"type": "tool", "name": "update_node", "tool_call_id": "call1", "content": json.dumps({"ok": True})},
+                    {"type": "ai", "tool_calls": [{"id": "call1", "name": "write_mutation_file", "args": write_payload}]},
+                    {"type": "tool", "name": "write_mutation_file", "tool_call_id": "call1", "content": json.dumps(write_result)},
+                    {"type": "ai", "tool_calls": [{"id": "call2", "name": "execute_mutation_file", "args": execute_payload}]},
+                    {"type": "tool", "name": "execute_mutation_file", "tool_call_id": "call2", "content": json.dumps(execute_result)},
                     {"role": "assistant", "content": "physical repair complete"},
                 ]
             }
 
-    result = repair_node(state, FakeRoleClient())
+    client = FakeRoleClient()
+    result = repair_node(state, client)
+    node = result["draft_artifact"]["graph"]["nodes"][0]
 
-    node = result["draft_artifact"]["tgraph_physical"]["nodes"][0]
-    assert node["image"]["id"] == "img1"
+    assert client.calls[0]["tool_names"] == [
+        "inspect_graph",
+        "read_support_file",
+        "write_checkpoint_file",
+        "write_mutation_file",
+        "execute_mutation_file",
+        "validate_graph",
+    ]
+    assert node["image"]["id"] == "img_openplc"
     assert node["flavor"]["vcpu"] == 1
-    assert result["draft_artifact"]["physical_checkpoints"][0]["description"] == "patched"
-    assert result["draft_artifact"]["physical_validator_script"] == "def broken_check(tgraph, **kwargs):\n    return []\n"
     assert result["messages"][-1]["content"] == "physical repair complete"
-    assert result["repair_history"][-1]["mode"] == "agent"
+    assert result["repair_history"][-1]["attempted_actions"][0]["tool"] == "write_mutation_file"
+    assert result["repair_history"][-1]["attempted_actions"][1]["tool"] == "execute_mutation_file"
 
 
-def test_physical_repair_injects_tgraph_contract_and_uses_agent_messages():
+def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
     state = {
         "logical_artifact": {
-            "tgraph_logical": {
-                "profile": "logical.v1",
+            "graph": {
+                "stage": "logical",
                 "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}],
                 "links": [],
-            }
+            },
+            "checkpoint_files": {},
         },
-        "ground_artifact": {"physical_constraints": [{"id": "pc1", "statement": "PLC1 needs an image and flavor."}]},
+        "ground_artifact": {
+            "physical_constraints": [
+                {"id": "pc1", "kind": "physical.custom", "statement": "PLC1 needs an image and flavor."}
+            ]
+        },
         "draft_artifact": {
-            "physical_checkpoints": [],
-            "physical_validator_script": None,
-            "tgraph_physical": {
-                "profile": "taal.default.v1",
+            "graph": {
+                "stage": "physical",
                 "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": [], "image": None, "flavor": None}],
                 "links": [],
             },
+            "constraint_files": {"physical": "physical/constraints.json"},
+            "checkpoint_files": {"physical": "physical/checkpoints.py"},
         },
-        "evaluation_report": {"ok": False, "issues": [{"code": "computer_image_required", "severity": "error"}]},
+        "evaluation_report": {"ok": False, "issues": [{"details": {"issue_kind": "missing_required_node_field"}, "severity": "error"}]},
         "attempt": 1,
         "repair_history": [],
         "events": [],
@@ -116,60 +132,12 @@ def test_physical_repair_injects_tgraph_contract_and_uses_agent_messages():
     assert "img_pfsense" in messages[2]["content"]
     assert "[tgraph_contract]" not in human_contents
     assert "[image_catalog]" not in human_contents
+    assert "[logical_topology]" in human_contents
     assert "[physical_constraints]" in human_contents
-    assert "find_checkpoints" in client.calls[0]["tool_names"]
-    assert "get_nodes" in client.calls[0]["tool_names"]
-    assert "get_links" in client.calls[0]["tool_names"]
-    assert "update_node" in client.calls[0]["tool_names"]
-
-
-def test_physical_repair_node_passes_explicit_field_names_to_bound_tools(monkeypatch):
-    captured = {}
-
-    class FakeBoundTools:
-        def topology_view(self):
-            return {"nodes": [], "links": []}
-
-        def tools(self):
-            return []
-
-        def artifact_state(self):
-            return {
-                "tgraph_physical": {"profile": "taal.default.v1", "nodes": [], "links": []},
-                "physical_checkpoints": [],
-                "physical_validator_script": None,
-            }
-
-        def validate(self):
-            return {"ok": True, "issues": []}
-
-    def fake_from_json(cls, graph_json, **kwargs):
-        captured["graph_json"] = graph_json
-        captured["kwargs"] = kwargs
-        return FakeBoundTools()
-
-    monkeypatch.setattr(repair_module.BoundTGraphTools, "from_json", classmethod(fake_from_json))
-
-    state = {
-        "logical_artifact": {"tgraph_logical": {"profile": "logical.v1", "nodes": [], "links": []}},
-        "ground_artifact": {"physical_constraints": []},
-        "draft_artifact": {
-            "physical_checkpoints": [{"id": "pc1", "func": "connect_nodes", "description": "x", "constraint_ids": [], "args": {}}],
-            "physical_validator_script": None,
-            "tgraph_physical": {"profile": "taal.default.v1", "nodes": [], "links": []},
-        },
-        "evaluation_report": {"ok": False, "issues": []},
-        "attempt": 0,
-        "repair_history": [],
-        "events": [],
-    }
-
-    repair_node(state, type("Client", (), {"invoke_agent": lambda self, **kwargs: {"messages": []}})())
-
-    assert captured["kwargs"]["graph_field"] == "tgraph_physical"
-    assert captured["kwargs"]["checkpoints_field"] == "physical_checkpoints"
-    assert captured["kwargs"]["validator_script_field"] == "physical_validator_script"
-    assert captured["kwargs"]["checkpoints"][0]["id"] == "pc1"
+    assert "[constraint_files]" in human_contents
+    assert "[checkpoint_files]" in human_contents
+    assert "write_mutation_file" in client.calls[0]["tool_names"]
+    assert "execute_mutation_file" in client.calls[0]["tool_names"]
 
 
 def _tool_name(tool):

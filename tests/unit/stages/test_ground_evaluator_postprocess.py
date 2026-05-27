@@ -9,7 +9,56 @@ class StubRoleClient:
         return self.report
 
 
-def test_evaluator_node_preserves_physical_only_issue_without_code_level_filtering():
+def test_evaluator_node_merges_structural_and_semantic_issues():
+    state = {
+        "attempt": 1,
+        "max_attempts": 3,
+        "draft_artifact": {
+            "node_groups": [{"type": "computer", "members": ["PLC1"]}],
+            "logical_constraints": [{"id": "lc1", "statement": "missing kind field"}],
+            "physical_constraints": [],
+        },
+        "retry_history": [],
+        "events": [],
+    }
+    client = StubRoleClient(
+        {
+            "passed": True,
+            "issues": [],
+            "notes": [],
+        }
+    )
+
+    result = evaluator_node(state, client)
+
+    assert result["evaluation_report"]["passed"] is False
+    assert result["evaluation_report"]["issues"]
+    assert result["next_action"] == "author"
+
+
+def test_evaluator_node_finalize_when_semantic_pass_and_structure_ok():
+    state = {
+        "attempt": 1,
+        "max_attempts": 3,
+        "draft_artifact": {
+            "node_groups": [{"type": "computer", "members": ["PLC1"]}],
+            "logical_constraints": [
+                {"id": "lc1", "kind": "logical.topology.direct", "statement": "PLC1 connects to SW1."}
+            ],
+            "physical_constraints": [],
+        },
+        "retry_history": [],
+        "events": [],
+    }
+    client = StubRoleClient({"passed": True, "issues": [], "notes": []})
+
+    result = evaluator_node(state, client)
+
+    assert result["evaluation_report"]["passed"] is True
+    assert result["next_action"] == "finalize"
+
+
+def test_evaluator_node_records_notes_on_retry():
     state = {
         "attempt": 1,
         "max_attempts": 3,
@@ -26,72 +75,15 @@ def test_evaluator_node_preserves_physical_only_issue_without_code_level_filteri
             "passed": False,
             "issues": [
                 {
-                    "code": "missing_physical_structure",
-                    "message": "No physical constraints are provided.",
-                    "location": "physical_constraints",
+                    "message": "missing WEB",
+                    "details": {"issue_kind": "ground.semantic.missing_node"},
                 }
             ],
-            "optimizer_brief": {},
+            "notes": ["add WEB"],
         }
     )
 
     result = evaluator_node(state, client)
 
-    assert result["evaluation_report"] == {
-        "passed": False,
-        "issues": [
-            {
-                "code": "missing_physical_structure",
-                "message": "No physical constraints are provided.",
-                "location": "physical_constraints",
-            }
-        ],
-        "optimizer_brief": {
-            "node_groups": [],
-            "logical_constraints": [],
-            "physical_constraints": [],
-            "notes": [],
-        },
-    }
     assert result["next_action"] == "author"
-    assert result["retry_history"][-1]["issues"][0]["code"] == "missing_physical_structure"
-
-
-def test_evaluator_node_preserves_nonempty_optimizer_brief_on_pass():
-    state = {
-        "attempt": 1,
-        "max_attempts": 3,
-        "draft_artifact": {
-            "node_groups": [{"type": "computer", "members": ["PLC1"]}],
-            "logical_constraints": [],
-            "physical_constraints": [],
-        },
-        "retry_history": [],
-        "events": [],
-    }
-    client = StubRoleClient(
-        {
-            "passed": True,
-            "issues": [],
-            "optimizer_brief": {
-                "node_groups": [{"type": "switch", "members": ["SW1"]}],
-                "logical_constraints": [{"id": "lc1", "statement": "PLC1 must connect to SW1."}],
-                "physical_constraints": [{"id": "pc1", "statement": "PLC1 must use image openplc."}],
-                "notes": ["keep this brief untouched"],
-            },
-        }
-    )
-
-    result = evaluator_node(state, client)
-
-    assert result["evaluation_report"] == {
-        "passed": True,
-        "issues": [],
-        "optimizer_brief": {
-            "node_groups": [{"type": "switch", "members": ["SW1"]}],
-            "logical_constraints": [{"id": "lc1", "statement": "PLC1 must connect to SW1."}],
-            "physical_constraints": [{"id": "pc1", "statement": "PLC1 must use image openplc."}],
-            "notes": ["keep this brief untouched"],
-        },
-    }
-    assert result["next_action"] == "finalize"
+    assert result["retry_history"][-1]["notes"] == ["add WEB"]

@@ -9,14 +9,6 @@ from pydantic import BaseModel
 from trace.runtime.role_client import RoleClient
 
 
-class CheckpointSpec(BaseModel):
-    id: str
-    func: str
-    description: str
-    constraint_ids: list[str]
-    args: dict[str, Any]
-
-
 def build_messages(
     *,
     system_prompt: str,
