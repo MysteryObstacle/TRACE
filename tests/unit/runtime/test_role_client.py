@@ -85,7 +85,7 @@ def test_role_client_invoke_agent_uses_react_agent_with_tools(monkeypatch):
         role_name="logical_repair",
         messages=[{"role": "system", "content": "repair sys"}, {"role": "human", "content": "fix it"}],
         tools=["tool-a"],
-        max_tool_calls=9,
+        max_react_steps=9,
     )
 
     assert result == {"messages": [{"role": "assistant", "content": "done"}]}
@@ -96,7 +96,7 @@ def test_role_client_invoke_agent_uses_react_agent_with_tools(monkeypatch):
             HumanMessage(content="fix it"),
         ]
     }
-    assert captured["config"] == {"recursion_limit": 9}
+    assert captured["config"] == {"recursion_limit": 18}
     assert captured["prompt"] is None
 
 

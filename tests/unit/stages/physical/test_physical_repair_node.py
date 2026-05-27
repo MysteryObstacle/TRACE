@@ -34,7 +34,7 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
         def __init__(self):
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append(
                 {
                     "role_name": role_name,
@@ -65,7 +65,7 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
             }
 
     client = FakeRoleClient()
-    result = repair_node(state, client)
+    result = _merge_physical_partial(state, repair_node(state, client))
     node = result["draft_artifact"]["graph"]["nodes"][0]
 
     tool_names = set(client.calls[0]["tool_names"])
@@ -123,7 +123,7 @@ def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
         def __init__(self):
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append({"role_name": role_name, "messages": messages, "tool_names": [_tool_name(tool) for tool in tools]})
             return {"messages": [{"role": "assistant", "content": "noop"}]}
 
@@ -159,3 +159,12 @@ def _call_tool(tool, payload=None):
     if payload is None:
         return tool()
     return tool(**payload)
+
+
+def _merge_physical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged
