@@ -77,6 +77,7 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
         "write_mutation_file",
         "execute_mutation_file",
         "validate_graph",
+        "list_support_files",
     ]
     assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
     assert graph["links"][0]["id"] == "PLC1-SW1-1"
