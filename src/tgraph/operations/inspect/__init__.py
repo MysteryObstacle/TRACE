@@ -16,7 +16,10 @@ def inspect_graph(graph: TGraph | dict[str, Any], *, view: str = "summary", **kw
     if view == "summary":
         return graph_summary(current)
     if view == "node":
-        return get_node(current, str(kwargs["node_id"]))
+        node_id = kwargs.get("node_id")
+        if not node_id:
+            raise ValueError("inspect_graph view='node' requires node_id")
+        return get_node(current, str(node_id))
     if view == "links":
         return get_links(
             current,
@@ -24,7 +27,11 @@ def inspect_graph(graph: TGraph | dict[str, Any], *, view: str = "summary", **kw
             port_id=kwargs.get("port_id"),
         )
     if view == "path":
-        return find_path(current, source=str(kwargs["source"]), target=str(kwargs["target"]))
+        source = kwargs.get("source")
+        target = kwargs.get("target")
+        if not source or not target:
+            raise ValueError("inspect_graph view='path' requires source and target")
+        return find_path(current, source=str(source), target=str(target))
     if view == "cidrs":
         return cidr_view(current)
     if view == "diff":

@@ -64,3 +64,17 @@ def test_execute_mutation_file_includes_graph_when_requested(tmp_path):
     result = tools.execute_mutation_file(path=write["path"], validate=False, include_graph=True)
     assert "graph" in result
     assert result["graph"]["stage"] == "logical"
+
+
+def test_inspect_graph_node_view_requires_node_id():
+    tools = StageRepairTools({"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}})
+    result = tools.inspect_graph(view="node")
+    assert result["ok"] is False
+    assert "node_id" in result["error"]["message"]
+
+
+def test_inspect_graph_path_view_requires_endpoints():
+    tools = StageRepairTools({"graph": _seed_logical_graph_dict(), "constraint_files": {}, "checkpoint_files": {}})
+    result = tools.inspect_graph(view="path", source="A")
+    assert result["ok"] is False
+    assert "source and target" in result["error"]["message"]

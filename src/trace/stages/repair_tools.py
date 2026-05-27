@@ -327,6 +327,9 @@ class StageRepairTools:
         baseline_attempt_id: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        param_error = _inspect_view_param_error(view=view, kwargs=kwargs)
+        if param_error is not None:
+            return param_error
         if view == "diff":
             baseline_graph = self._resolve_diff_baseline(against=against, baseline_attempt_id=baseline_attempt_id)
             if isinstance(baseline_graph, dict) and baseline_graph.get("ok") is False:
@@ -510,3 +513,12 @@ def _safe_relative_path(relative_path: str) -> str:
     if not raw or path.is_absolute() or ".." in path.parts:
         raise ValueError(f"unsafe support file path: {relative_path!r}")
     return raw
+
+
+def _inspect_view_param_error(*, view: str, kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    if view == "node" and not kwargs.get("node_id"):
+        return {"ok": False, "error": {"message": "inspect_graph view='node' requires node_id"}}
+    if view == "path":
+        if not kwargs.get("source") or not kwargs.get("target"):
+            return {"ok": False, "error": {"message": "inspect_graph view='path' requires source and target"}}
+    return None
