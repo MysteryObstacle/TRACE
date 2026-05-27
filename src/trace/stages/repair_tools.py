@@ -12,6 +12,7 @@ from tgraph import TGraph, inspect_graph, validate_graph
 from tgraph.operations.mutate import execute_mutation_file
 from tgraph.operations.validate import ValidationContext
 from trace.stages.support_files import _FilterParams, filtered_view
+from trace.tools.images.catalog import find_images, get_image
 
 
 class MutationSummary(BaseModel):
@@ -93,6 +94,17 @@ class _ExecuteMutationFileInput(BaseModel):
     include_graph: bool = False
 
 
+class _FindImagesInput(BaseModel):
+    query: str | None = None
+    roles: list[str] | None = None
+    node_type: str | None = None
+    limit: int = 10
+
+
+class _GetImageInput(BaseModel):
+    image_id: str
+
+
 class StageRepairTools:
     def __init__(
         self,
@@ -120,7 +132,7 @@ class StageRepairTools:
     def support_files(self) -> dict[str, str]:
         return dict(self._support_files)
 
-    def as_agent_tools(self, *, include_checkpoint_tool: bool = True) -> list[Any]:
+    def as_agent_tools(self, *, include_checkpoint_tool: bool = True, include_image_tools: bool = False) -> list[Any]:
         @tool("inspect_graph", args_schema=_InspectGraphToolInput)
         def inspect_graph_tool(
             view: str = "summary",
@@ -186,6 +198,28 @@ class StageRepairTools:
         ]
         if include_checkpoint_tool:
             tools.insert(2, write_checkpoint_file_tool)
+        if include_image_tools:
+            @tool("find_images", args_schema=_FindImagesInput)
+            def find_images_tool(
+                query: str | None = None,
+                roles: list[str] | None = None,
+                node_type: str | None = None,
+                limit: int = 10,
+            ) -> dict[str, Any]:
+                """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
+
+                return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
+
+            @tool("get_image", args_schema=_GetImageInput)
+            def get_image_tool(image_id: str) -> dict[str, Any]:
+                """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
+
+                try:
+                    return get_image(image_id)
+                except KeyError as exc:
+                    return {"ok": False, "error": {"message": str(exc)}}
+
+            tools.extend([find_images_tool, get_image_tool])
         return tools
 
     def inspect_graph(self, *, view: str = "summary", **kwargs: Any) -> dict[str, Any]:
