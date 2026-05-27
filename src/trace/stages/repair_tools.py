@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,57 @@ from pydantic import BaseModel, ConfigDict, Field
 from tgraph import TGraph, inspect_graph, validate_graph
 from tgraph.operations.mutate import execute_mutation_file
 from tgraph.operations.validate import ValidationContext
+
+
+class MutationSummary(BaseModel):
+    stage: str
+    node_count: int
+    link_count: int
+    affected_node_ids: list[str]
+    affected_link_ids: list[str]
+    op_counts: dict[str, int]
+
+    @classmethod
+    def from_operations(
+        cls,
+        *,
+        stage: str,
+        node_count: int,
+        link_count: int,
+        operations: list[dict[str, Any]],
+    ) -> MutationSummary:
+        node_ids: set[str] = set()
+        link_ids: set[str] = set()
+        for op in operations:
+            if isinstance(op.get("node"), str):
+                node_ids.add(op["node"])
+            if isinstance(op.get("nodes"), list):
+                node_ids.update(item for item in op["nodes"] if isinstance(item, str))
+            if isinstance(op.get("segment"), str):
+                node_ids.add(op["segment"])
+            if isinstance(op.get("link"), str):
+                link_ids.add(op["link"])
+            if isinstance(op.get("links_removed"), list):
+                link_ids.update(item for item in op["links_removed"] if isinstance(item, str))
+            if isinstance(op.get("ports_removed"), list):
+                for token in op["ports_removed"]:
+                    if not isinstance(token, str):
+                        continue
+                    node_part = token.split(".", 1)[0]
+                    if node_part:
+                        node_ids.add(node_part)
+        return cls(
+            stage=stage,
+            node_count=node_count,
+            link_count=link_count,
+            affected_node_ids=sorted(node_ids),
+            affected_link_ids=sorted(link_ids),
+            op_counts=_derive_op_counts(operations),
+        )
+
+
+def _derive_op_counts(operations: list[dict[str, Any]]) -> dict[str, int]:
+    return dict(Counter(op.get("op", "") for op in operations if op.get("op")))
 
 
 class _InspectGraphToolInput(BaseModel):
