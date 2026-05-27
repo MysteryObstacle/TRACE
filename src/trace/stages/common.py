@@ -54,8 +54,35 @@ def invoke_role(
 
 
 def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[str, Any]:
+    if final_state.get("status") == "unsolvable":
+        return {
+            "status": "unsolvable",
+            "evaluation_summary": final_state.get("evaluation_report"),
+            "attempts_used": final_state.get("attempt", 1),
+            "messages": final_state.get("messages", []),
+            "tool_journal": [],
+            _stage_history_name(stage_id): final_state.get(_stage_history_name(stage_id), []),
+            "events": final_state.get("events", []),
+            "support_files": final_state.get("support_files", {}),
+            "unsolvable_notes": final_state.get("unsolvable_notes", []),
+        }
+
     if "result" in final_state:
-        return final_state["result"]
+        result = final_state["result"]
+        if isinstance(result, dict) and result.get("status") == "escalated":
+            return {
+                "status": "escalated",
+                "escalation_report": result.get("escalation_report") or {},
+                "partial_artifact": result.get("partial_artifact") or {},
+                "evaluation_summary": result.get("evaluation_summary") or {},
+                "attempts_used": result.get("attempts_used", 1),
+                "messages": result.get("messages", []),
+                "tool_journal": result.get("tool_journal", []),
+                _stage_history_name(stage_id): result.get(_stage_history_name(stage_id), []),
+                "events": result.get("events", []),
+                "support_files": result.get("support_files", {}),
+            }
+        return result
 
     error = final_state.get("error") or {}
     message = error.get("message") or f"{stage_id} stage did not produce a result"
@@ -63,6 +90,12 @@ def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[
     if issues:
         raise RuntimeError(f"{message}: {issues}")
     raise RuntimeError(message)
+
+
+def _stage_history_name(stage_id: str) -> str:
+    if stage_id == "ground":
+        return "retry_history"
+    return "repair_history"
 
 
 def _format_context_value(value: Any) -> str:

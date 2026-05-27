@@ -9,6 +9,7 @@ from trace.config.settings import TraceSettings
 from trace.stages.common import require_stage_result
 from trace.stages.physical.nodes.author import author_node
 from trace.stages.physical.nodes.builder import builder_node
+from trace.stages.physical.nodes.escalate import escalate_node
 from trace.stages.physical.nodes.finalize import finalize_node
 from trace.stages.physical.nodes.prepare import prepare_node
 from trace.stages.physical.nodes.repair import repair_node
@@ -49,12 +50,14 @@ def _build_physical_graph(*, role_client, settings: TraceSettings):
     graph.add_node("validator", validator_node)
     graph.add_node("repair", lambda state: repair_node(state, role_client))
     graph.add_node("finalize", finalize_node)
+    graph.add_node("escalate", escalate_node)
     graph.set_entry_point("prepare")
     graph.add_edge("prepare", "author")
     graph.add_edge("author", "builder")
     graph.add_edge("builder", "validator")
     graph.add_edge("repair", "validator")
     graph.add_edge("finalize", END)
+    graph.add_edge("escalate", END)
     return graph.compile()
 
 

@@ -19,3 +19,4 @@ class LogicalState(TypedDict, total=False):
     support_file_root: str
     result: dict[str, Any]
     error: dict[str, Any] | None
+    escalation_report: dict[str, Any] | None
