@@ -48,6 +48,7 @@ def test_inspect_graph_diff_against_previous_attempt_uses_snapshot(tmp_path):
         path="logical/mutations/attempt_1.py",
     )
     tools.execute_mutation_file(path=write["path"], validate=False)
+    tools = StageRepairTools(tools.artifact_state(), support_files=tools.support_files(), support_file_root=str(tmp_path))
     write2 = tools.write_mutation_file(
         content="def mutate(tgraph):\n    tgraph.ensure_node('C', type='computer', label='C')\n",
         path="logical/mutations/attempt_2.py",

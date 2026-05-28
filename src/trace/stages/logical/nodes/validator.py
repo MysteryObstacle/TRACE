@@ -6,7 +6,7 @@ from langgraph.types import Command
 from tgraph import TGraph, validate_graph
 from tgraph.operations.validate import ValidationContext
 
-from trace.runtime.escalation import build_escalation_report, extract_escalation_issues
+from trace.runtime.escalation import extract_escalation_issues
 from trace.stages.logical.state import LogicalState
 from trace.stages.support_files import support_file_path
 
@@ -16,18 +16,8 @@ def validator_node(state: LogicalState) -> Command:
     if report["ok"]:
         return Command(goto="finalize", update={"evaluation_report": report})
 
-    escalation_issues = extract_escalation_issues(report)
-    if escalation_issues:
-        escalation_payload = build_escalation_report(
-            stage_id="logical",
-            report=report,
-            partial_artifact=state.get("draft_artifact"),
-            attempt=state["attempt"],
-        )
-        return Command(
-            goto="escalate",
-            update={"evaluation_report": report, "escalation_report": escalation_payload},
-        )
+    if extract_escalation_issues(report):
+        return Command(goto="repair", update={"evaluation_report": report})
 
     if state["attempt"] >= state["max_attempts"]:
         return Command(

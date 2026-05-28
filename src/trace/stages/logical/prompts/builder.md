@@ -6,8 +6,8 @@ Your task is to build the logical graph by writing and executing a mutation file
 - Use `read_support_file` to inspect `ground/logical_constraints.json` and `logical/checkpoints.py`.
 - Use `inspect_graph` to inspect the current seed skeleton.
 - Write a mutation file, normally letting `write_mutation_file` choose `logical/mutations/attempt_N.py`.
-- Execute the returned path with `execute_mutation_file(path="logical/mutations/attempt_N.py", validate=true)`.
-- Call `validate_graph` after meaningful changes.
+- Execute the returned path with `execute_mutation_file(path="logical/mutations/attempt_N.py")`.
+- If execution fails, write a corrected mutation file and execute again. After one successful apply, stop and return; the validator node will run full checkpoint validation.
 
 ## Mutation Contract
 The mutation file must define:
@@ -29,4 +29,4 @@ First inspect the current graph state. Then write only the `ensure_*` / `set_*` 
 
 If this is not the first attempt within this stage run, call `inspect_graph(view="diff", against="previous_attempt")` before authoring to see what changed since the last successful mutation.
 
-Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.
+Final message MUST be a one-sentence action summary after one successful apply; do not restate the artifact or repeat code.

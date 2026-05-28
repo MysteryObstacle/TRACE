@@ -61,7 +61,7 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
                     "content": "def mutate(tgraph):\n    tgraph.ensure_direct_link('PLC1', 'SW1')\n",
                 },
             )
-            _call_tool(bound["execute_mutation_file"], {"path": "logical/mutations/attempt_1.py", "validate": True})
+            _call_tool(bound["execute_mutation_file"], {"path": "logical/mutations/attempt_1.py"})
             return {"messages": [{"role": "assistant", "content": "logical build complete"}]}
 
     client = FakeRoleClient()
@@ -76,7 +76,6 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
         "read_support_file",
         "write_mutation_file",
         "execute_mutation_file",
-        "validate_graph",
         "list_support_files",
     ]
     assert "write_checkpoint_file" not in client.calls[0]["tool_names"]

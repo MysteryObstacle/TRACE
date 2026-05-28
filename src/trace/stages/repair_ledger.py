@@ -37,15 +37,15 @@ def build_repair_ledger_entry(
     *,
     round_index: int,
     issues_before: dict[str, Any],
-    issues_after: dict[str, Any],
+    issues_after: dict[str, Any] | None,
     attempted_actions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     before = issue_kinds(issues_before)
-    after = issue_kinds(issues_after)
+    after = issue_kinds(issues_after or {})
     before_set = set(before)
     after_set = set(after)
     failed_actions = [item for item in attempted_actions if item.get("ok") is False]
-    return {
+    entry = {
         "round": round_index,
         "mode": "agent",
         "issue_count": len(issues_before.get("issues", [])),
@@ -57,6 +57,12 @@ def build_repair_ledger_entry(
         "failed_actions": failed_actions,
         "produced_files": _derive_produced_files(attempted_actions),
     }
+    if issues_after is None:
+        entry["validation_deferred"] = True
+        entry["resolved_issue_kinds"] = []
+        entry["remaining_issue_kinds"] = []
+        entry["new_issue_kinds"] = []
+    return entry
 
 
 def issue_kinds(report: dict[str, Any]) -> list[str]:

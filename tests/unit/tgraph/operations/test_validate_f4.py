@@ -40,6 +40,49 @@ def check_lc1(tgraph):
     assert report.issues[0].details["constraint_id"] == "lc1"
 
 
+def test_tgraph_view_accepts_legacy_port_and_subnet_aliases_in_checkpoints(tmp_path) -> None:
+    constraints_path = tmp_path / "logical_constraints.json"
+    checkpoints_path = tmp_path / "checkpoints.py"
+    constraints_path.write_text(
+        '{"lc1": {"kind": "logical.custom", "statement": "WEB has an address in subnet."}}',
+        encoding="utf-8",
+    )
+    checkpoints_path.write_text(
+        """
+def check_lc1(tgraph):
+    ports = tgraph.get_ports("WEB")
+    if not ports or not tgraph.ip_in_subnet("10.10.10.2", "10.10.10.0/24"):
+        return [tgraph.issue("logical.custom", "alias failed")]
+    return []
+""",
+        encoding="utf-8",
+    )
+    graph = TGraph.model_validate(
+        {
+            "stage": "logical",
+            "nodes": [
+                {
+                    "id": "WEB",
+                    "type": "computer",
+                    "label": "WEB",
+                    "ports": [{"id": "p1", "ip": "10.10.10.2", "cidr": "10.10.10.0/24"}],
+                }
+            ],
+            "links": [],
+        }
+    )
+
+    report = validate_graph(
+        graph,
+        context=ValidationContext(
+            constraint_files={"logical": constraints_path},
+            checkpoint_files={"logical": checkpoints_path},
+        ),
+    )
+
+    assert report.ok is True
+
+
 def test_empty_constraint_file_does_not_require_checkpoint_file(tmp_path) -> None:
     constraints_path = tmp_path / "physical_constraints.json"
     constraints_path.write_text("{}", encoding="utf-8")

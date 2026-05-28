@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from langgraph.types import Command
+
+from trace.runtime.escalation import build_escalation_report, extract_escalation_issues
 from trace.stages.ground.schemas import LOGICAL_CONSTRAINTS_PATH
 from trace.stages.logical.state import LogicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
@@ -21,7 +24,21 @@ PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
 MAX_REACT_STEPS = 12
 
 
-def repair_node(state: LogicalState, role_client) -> LogicalState:
+def repair_node(state: LogicalState, role_client) -> Command:
+    escalation_issues = extract_escalation_issues(state["evaluation_report"])
+    if escalation_issues:
+        return Command(
+            goto="escalate",
+            update={
+                "escalation_report": build_escalation_report(
+                    stage_id="logical",
+                    report=state["evaluation_report"],
+                    partial_artifact=state.get("draft_artifact"),
+                    attempt=state["attempt"],
+                )
+            },
+        )
+
     prior_ledger = list(state.get("repair_history", []))
     repair_tools = StageRepairTools(
         state["draft_artifact"],
@@ -53,23 +70,25 @@ def repair_node(state: LogicalState, role_client) -> LogicalState:
         max_react_steps=MAX_REACT_STEPS,
     )
 
-    post_repair_report = repair_tools.validate_graph()
     ledger_entry = _build_repair_ledger_entry(
         round_index=len(prior_ledger) + 1,
         issues_before=state["evaluation_report"],
-        issues_after=post_repair_report,
+        issues_after=None,
         attempted_actions=_extract_tool_attempts(agent_result),
     )
     next_attempt = state["attempt"] + 1
 
-    return {
-        "draft_artifact": repair_tools.artifact_state(),
-        "support_files": repair_tools.support_files(),
-        "messages": _extract_messages(agent_result),
-        "attempt": next_attempt,
-        "repair_history": [ledger_entry],
-        "events": [{"type": "logical.repair.completed", "attempt": next_attempt}],
-    }
+    return Command(
+        goto="validator",
+        update={
+            "draft_artifact": repair_tools.artifact_state(),
+            "support_files": repair_tools.support_files(),
+            "messages": _extract_messages(agent_result),
+            "attempt": next_attempt,
+            "repair_history": [ledger_entry],
+            "events": [{"type": "logical.repair.completed", "attempt": next_attempt}],
+        },
+    )
 
 
 def _build_repair_messages(

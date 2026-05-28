@@ -1,5 +1,7 @@
 import json
 
+from langgraph.types import Command
+
 from trace.stages.logical.nodes.repair import repair_node
 
 
@@ -47,7 +49,7 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
                 "content": "def mutate(tgraph):\n    tgraph.ensure_direct_link('R1', 'R2')\n",
             }
             write_result = _call_tool(bound["write_mutation_file"], write_payload)
-            execute_payload = {"path": "logical/mutations/attempt_1.py", "validate": True}
+            execute_payload = {"path": "logical/mutations/attempt_1.py"}
             execute_result = _call_tool(bound["execute_mutation_file"], execute_payload)
             return {
                 "messages": [
@@ -60,7 +62,10 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
             }
 
     client = FakeRoleClient()
-    result = _merge_logical_partial(state, repair_node(state, client))
+    partial = repair_node(state, client)
+    assert isinstance(partial, Command)
+    assert partial.goto == "validator"
+    result = _merge_logical_partial(state, partial)
     graph = result["draft_artifact"]["graph"]
 
     assert client.calls[0]["role_name"] == "logical_repair"
@@ -71,7 +76,6 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
         "write_checkpoint_file",
         "write_mutation_file",
         "execute_mutation_file",
-        "validate_graph",
         "list_support_files",
     }.issubset(tool_names)
     assert "find_images" not in tool_names
@@ -83,9 +87,39 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
     assert result["repair_history"][-1]["attempted_actions"][0]["tool"] == "write_mutation_file"
     assert result["repair_history"][-1]["attempted_actions"][1]["tool"] == "execute_mutation_file"
     assert result["repair_history"][-1]["failed_actions"] == []
+    assert result["repair_history"][-1]["validation_deferred"] is True
     assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
     assert result["repair_history"][-1]["produced_files"][0]["path"] == "logical/mutations/attempt_1.py"
     assert "logical/mutations/attempt_1.py" in result["support_files"]
+
+
+def test_logical_repair_routes_explicit_escalation_without_invoking_agent(tmp_path):
+    state = {
+        "draft_artifact": {
+            "graph": {"stage": "logical", "nodes": [], "links": []},
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+        "support_files": {},
+        "support_file_root": str(tmp_path),
+        "evaluation_report": {
+            "ok": False,
+            "issues": [{"message": "conflict", "details": {"issue_kind": "logical.escalation.constraint_conflict"}}],
+        },
+        "attempt": 1,
+        "repair_history": [],
+        "events": [],
+    }
+
+    class FailingRoleClient:
+        def invoke_agent(self, **_kwargs):
+            raise AssertionError("repair agent should not be invoked for explicit escalation issues")
+
+    result = repair_node(state, FailingRoleClient())
+
+    assert isinstance(result, Command)
+    assert result.goto == "escalate"
+    assert result.update["escalation_report"]["source_stage"] == "logical"
 
 
 def test_logical_repair_node_injects_file_refs_and_recent_ledger():
@@ -155,6 +189,7 @@ def test_logical_repair_node_injects_file_refs_and_recent_ledger():
     assert "failed_actions" in contents
     assert "read_support_file" in client.calls[0]["tool_names"]
     assert "write_checkpoint_file" in client.calls[0]["tool_names"]
+    assert "validate_graph" not in client.calls[0]["tool_names"]
 
 
 def test_logical_repair_node_writes_back_mutated_checkpoint_file():
@@ -216,7 +251,9 @@ def _call_tool(tool, payload=None):
     return tool(**payload)
 
 
-def _merge_logical_partial(state: dict, partial: dict) -> dict:
+def _merge_logical_partial(state: dict, partial: dict | Command) -> dict:
+    if isinstance(partial, Command):
+        partial = partial.update
     merged = {**state, **partial}
     if "repair_history" in partial:
         merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])

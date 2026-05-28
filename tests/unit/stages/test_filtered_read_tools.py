@@ -75,7 +75,10 @@ def test_list_support_files_returns_sorted_paths():
         _seed_artifact(),
         support_files={"logical/checkpoints.py": "", "ground/logical_constraints.json": "{}"},
     )
-    assert tools.list_support_files() == {"paths": ["ground/logical_constraints.json", "logical/checkpoints.py"]}
+    result = tools.list_support_files()
+    assert result["paths"] == ["ground/logical_constraints.json", "logical/checkpoints.py"]
+    assert result["support_files"] == ["ground/logical_constraints.json", "logical/checkpoints.py"]
+    assert "docs/tgraph_view_api.md" in result["agent_docs"]
 
 
 def test_list_support_files_exposed_as_agent_tool():

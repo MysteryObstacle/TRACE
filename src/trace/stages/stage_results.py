@@ -21,7 +21,6 @@ def compile_repair_stage_graph(
     graph.add_edge("prepare", "author")
     graph.add_edge("author", "builder")
     graph.add_edge("builder", "validator")
-    graph.add_edge("repair", "validator")
     graph.add_edge("finalize", END)
     graph.add_edge("escalate", END)
     return graph.compile(checkpointer=checkpointer)
