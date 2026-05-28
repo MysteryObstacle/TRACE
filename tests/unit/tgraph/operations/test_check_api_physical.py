@@ -21,16 +21,16 @@ def _graph() -> TGraph:
     )
 
 
-def test_check_image_exact() -> None:
+def test_check_image_exact_accepts_legacy_and_canonical_ids() -> None:
     view = TGraphView(_graph())
 
     assert view.check_image_exact("FIREWALL", "img-fw") == []
+    assert view.check_image_exact("FIREWALL", "pfsense") == []
 
-    issues = view.check_image_exact("FIREWALL", "img-router")
+    issues = view.check_image_exact("FIREWALL", "ubuntu_22")
     assert _issue_kinds(issues) == ["physical.image.exact.mismatch"]
-    assert issues[0]["details"]["fact_kind"] == "physical.image.exact"
-    assert issues[0]["details"]["expected_image_id"] == "img-router"
-    assert issues[0]["details"]["actual_image_id"] == "img-fw"
+    assert issues[0]["details"]["expected_image_id"] == "ubuntu_22"
+    assert issues[0]["details"]["actual_image_id"] == "pfsense"
 
 
 def test_check_flavor_minimum() -> None:

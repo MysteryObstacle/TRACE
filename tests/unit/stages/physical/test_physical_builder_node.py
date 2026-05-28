@@ -15,7 +15,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
             "node_groups": [],
             "logical_constraints": [],
             "physical_constraints": [
-                {"id": "pc1", "kind": "physical.image.exact", "statement": "PLC1 uses image img_openplc."}
+                {"id": "pc1", "kind": "physical.image.exact", "statement": "PLC1 uses image openplc."}
             ],
         },
         "draft_artifact": {
@@ -27,7 +27,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
                         "type": "computer",
                         "label": "PLC1",
                         "ports": [],
-                        "image": {"id": "img_ubuntu_22", "name": "ubuntu-22.04"},
+                        "image": {"id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud"},
                         "flavor": {"vcpu": 2, "ram": 2048, "disk": 20},
                     }
                 ],
@@ -38,11 +38,11 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
         },
         "support_files": {
             "ground/physical_constraints.json": (
-                '{"pc1": {"kind": "physical.image.exact", "statement": "PLC1 uses image img_openplc."}}'
+                '{"pc1": {"kind": "physical.image.exact", "statement": "PLC1 uses image openplc."}}'
             ),
             "physical/checkpoints.py": (
                 "def check_pc1(tgraph):\n"
-                "    return tgraph.check_image_exact('PLC1', 'img_openplc')\n"
+                "    return tgraph.check_image_exact('PLC1', 'openplc')\n"
             ),
         },
         "support_file_root": str(tmp_path),
@@ -68,10 +68,10 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
                 bound["write_mutation_file"],
                 {
                     "path": "physical/mutations/attempt_1.py",
-                    "content": "def mutate(tgraph):\n    tgraph.set_image('PLC1', 'img_openplc', name='OpenPLC')\n",
+                    "content": "def mutate(tgraph):\n    tgraph.set_image('PLC1', 'openplc', name='OpenPLC Runtime')\n",
                 },
             )
-            _call_tool(bound["execute_mutation_file"], {"path": "physical/mutations/attempt_1.py", "validate": True})
+            _call_tool(bound["execute_mutation_file"], {"path": "physical/mutations/attempt_1.py"})
             return {"messages": [{"role": "assistant", "content": "physical build complete"}]}
 
     client = FakeRoleClient()
@@ -87,20 +87,21 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
         "read_support_file",
         "write_mutation_file",
         "execute_mutation_file",
-        "validate_graph",
         "list_support_files",
+        "list_images",
         "find_images",
         "get_image",
     }.issubset(tool_names)
     assert "write_checkpoint_file" not in tool_names
     assert "[tgraph_contract]" in system_content
+    assert "[image_catalog_summary]" in system_content
+    assert "pfsense" in system_content
     assert "[image_catalog]" not in system_content
-    assert "img_pfsense" not in system_content
     assert "[tgraph_contract]" not in human_content
     assert "[image_catalog]" not in human_content
     assert "[working_graph]" not in human_content
     assert "[graph_summary]" not in human_content
-    assert result["draft_artifact"]["graph"]["nodes"][0]["image"]["id"] == "img_openplc"
+    assert result["draft_artifact"]["graph"]["nodes"][0]["image"]["id"] == "openplc"
     assert result["draft_artifact"]["checkpoint_files"] == {"physical": "physical/checkpoints.py"}
     assert result["draft_artifact"]["constraint_files"] == {"physical": "ground/physical_constraints.json"}
     assert "working_graph" not in result

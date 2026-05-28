@@ -79,6 +79,8 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
 
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
+    assert "validate=true" not in builder_prompt
+    assert "validate_graph" not in builder_prompt
     assert "logical/mutations/attempt_N.py" in builder_prompt
     assert "logical/mutations/build.py" not in builder_prompt
     assert "logical/constraints.json" not in builder_prompt
@@ -89,6 +91,7 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
     assert "write_checkpoint_file" in repair_prompt
+    assert "validate_graph" not in repair_prompt
     assert "apply_graph_patch" not in repair_prompt
 
 
@@ -99,6 +102,8 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
 
     assert "ground/physical_constraints.json" in author_prompt
     assert "physical/constraints.json" not in author_prompt
+    assert "image_catalog_summary" in author_prompt
+    assert "list_images" in author_prompt
     assert "find_images" in author_prompt
     assert "get_image" in author_prompt
     assert "physical/checkpoints.py" in author_prompt
@@ -110,18 +115,24 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
 
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
+    assert "validate=true" not in builder_prompt
+    assert "validate_graph" not in builder_prompt
     assert "physical/mutations/attempt_N.py" in builder_prompt
     assert "physical/mutations/build.py" not in builder_prompt
     assert "physical/constraints.json" not in builder_prompt
     assert "image" in builder_prompt
     assert "flavor" in builder_prompt
+    assert "image_catalog_summary" in builder_prompt
+    assert "list_images" in builder_prompt
     assert "find_images" in builder_prompt
+    assert "type=computer" in builder_prompt
     assert "working_graph" not in builder_prompt
 
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
-    assert "validate_graph" in repair_prompt
+    assert "validate_graph" not in repair_prompt
     assert "replace_validator_script" not in repair_prompt
+    assert "list_images" in repair_prompt
     assert "find_images" in repair_prompt
     assert "get_image" in repair_prompt
     assert "apply_graph_patch" not in repair_prompt

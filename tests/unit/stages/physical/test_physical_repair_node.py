@@ -1,5 +1,7 @@
 import json
 
+from langgraph.types import Command
+
 from trace.stages.physical.nodes.repair import repair_node
 
 
@@ -52,7 +54,7 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
                 ),
             }
             write_result = _call_tool(bound["write_mutation_file"], write_payload)
-            execute_payload = {"path": "physical/mutations/attempt_1.py", "validate": True}
+            execute_payload = {"path": "physical/mutations/attempt_1.py"}
             execute_result = _call_tool(bound["execute_mutation_file"], execute_payload)
             return {
                 "messages": [
@@ -65,7 +67,10 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
             }
 
     client = FakeRoleClient()
-    result = _merge_physical_partial(state, repair_node(state, client))
+    partial = repair_node(state, client)
+    assert isinstance(partial, Command)
+    assert partial.goto == "validator"
+    result = _merge_physical_partial(state, partial)
     node = result["draft_artifact"]["graph"]["nodes"][0]
 
     tool_names = set(client.calls[0]["tool_names"])
@@ -75,7 +80,6 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
         "write_checkpoint_file",
         "write_mutation_file",
         "execute_mutation_file",
-        "validate_graph",
         "list_support_files",
         "find_images",
         "get_image",
@@ -85,8 +89,39 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
     assert result["messages"][-1]["content"] == "physical repair complete"
     assert result["repair_history"][-1]["attempted_actions"][0]["tool"] == "write_mutation_file"
     assert result["repair_history"][-1]["attempted_actions"][1]["tool"] == "execute_mutation_file"
+    assert result["repair_history"][-1]["validation_deferred"] is True
     assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
     assert result["repair_history"][-1]["produced_files"][0]["path"] == "physical/mutations/attempt_1.py"
+
+
+def test_physical_repair_routes_explicit_escalation_without_invoking_agent(tmp_path):
+    state = {
+        "logical_artifact": {"graph": {"stage": "logical", "nodes": [], "links": []}},
+        "draft_artifact": {
+            "graph": {"stage": "physical", "nodes": [], "links": []},
+            "constraint_files": {},
+            "checkpoint_files": {},
+        },
+        "support_files": {},
+        "support_file_root": str(tmp_path),
+        "evaluation_report": {
+            "ok": False,
+            "issues": [{"message": "no image", "details": {"issue_kind": "physical.escalation.no_satisfying_image"}}],
+        },
+        "attempt": 1,
+        "repair_history": [],
+        "events": [],
+    }
+
+    class FailingRoleClient:
+        def invoke_agent(self, **_kwargs):
+            raise AssertionError("repair agent should not be invoked for explicit escalation issues")
+
+    result = repair_node(state, FailingRoleClient())
+
+    assert isinstance(result, Command)
+    assert result.goto == "escalate"
+    assert result.update["escalation_report"]["source_stage"] == "physical"
 
 
 def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
@@ -144,6 +179,7 @@ def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
     assert "[checkpoint_files]" in human_contents
     assert "write_mutation_file" in client.calls[0]["tool_names"]
     assert "execute_mutation_file" in client.calls[0]["tool_names"]
+    assert "validate_graph" not in client.calls[0]["tool_names"]
 
 
 def _tool_name(tool):
@@ -161,7 +197,9 @@ def _call_tool(tool, payload=None):
     return tool(**payload)
 
 
-def _merge_physical_partial(state: dict, partial: dict) -> dict:
+def _merge_physical_partial(state: dict, partial: dict | Command) -> dict:
+    if isinstance(partial, Command):
+        partial = partial.update
     merged = {**state, **partial}
     if "repair_history" in partial:
         merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])

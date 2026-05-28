@@ -79,3 +79,44 @@ def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None
     assert {item["details"]["issue_kind"] for item in result.update["evaluation_report"]["issues"]} >= {
         "checkpoint.execution.exception"
     }
+
+
+def test_physical_validator_routes_escalation_issues_to_repair_not_escalate(tmp_path) -> None:
+    graph = {
+        "stage": "physical",
+        "nodes": [
+            {
+                "id": "PLC1",
+                "type": "computer",
+                "label": "PLC1",
+                "ports": [],
+                "image": {"id": "img1", "name": "Image"},
+                "flavor": {"vcpu": 1, "ram": 512, "disk": 4},
+            }
+        ],
+        "links": [],
+    }
+    state = {
+        "draft_artifact": {
+            "constraint_files": {"physical": "ground/physical_constraints.json"},
+            "checkpoint_files": {"physical": "physical/checkpoints.py"},
+            "graph": graph,
+        },
+        "logical_artifact": {"graph": {"stage": "logical", "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": []}], "links": []}},
+        "support_files": {
+            "ground/physical_constraints.json": '{"pc1": {"kind": "physical.custom", "statement": "unavailable image"}}',
+            "physical/checkpoints.py": (
+                "def check_pc1(tgraph):\n"
+                "    return tgraph.escalate('physical.escalation.no_satisfying_image', 'no image')\n"
+            ),
+        },
+        "support_file_root": str(tmp_path),
+        "attempt": 1,
+        "max_attempts": 3,
+        "ground_artifact": {"physical_constraints": [{"id": "pc1", "kind": "physical.custom", "statement": "unavailable image"}]},
+    }
+
+    result = validator_node(state)
+
+    assert result.goto == "repair"
+    assert result.update["evaluation_report"]["issues"][0]["details"]["issue_kind"] == "physical.escalation.no_satisfying_image"

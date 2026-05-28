@@ -11,10 +11,10 @@ from trace.stages.common import build_messages
 from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
-from trace.stages.repair_tools import _FindImagesInput, _GetImageInput
 from trace.stages.stage_results import extract_agent_messages
 from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
-from trace.tools.images.catalog import find_images, get_image
+from trace.tools.images.agent_surface import build_image_agent_tools
+from trace.tools.images.catalog import catalog_summary_for_prompt
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "author.md"
@@ -36,7 +36,10 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
             "constraint_files": state.get("draft_artifact", {}).get("constraint_files", {})
             or ground_artifact.get("constraint_files", {"physical": DEFAULT_CONSTRAINT_PATH}),
         },
-        system_context_sections={"tgraph_contract": load_tgraph_contract_for("physical_author")},
+        system_context_sections={
+            "tgraph_contract": load_tgraph_contract_for("physical_author"),
+            "image_catalog_summary": catalog_summary_for_prompt(node_types=["computer"]),
+        },
     )
     agent_result = role_client.invoke_agent(
         role_name="physical_author",
@@ -119,33 +122,12 @@ class PhysicalAuthorTools:
 
             return self.validate_checkpoint_file(path)
 
-        @tool("find_images", args_schema=_FindImagesInput)
-        def find_images_tool(
-            query: str | None = None,
-            roles: list[str] | None = None,
-            node_type: str | None = None,
-            limit: int = 10,
-        ) -> dict[str, Any]:
-            """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
-
-            return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
-
-        @tool("get_image", args_schema=_GetImageInput)
-        def get_image_tool(image_id: str) -> dict[str, Any]:
-            """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
-
-            try:
-                return get_image(image_id)
-            except KeyError as exc:
-                return {"ok": False, "error": {"message": str(exc)}}
-
         return [
             write_checkpoint_file_tool,
             remove_checkpoint_file_tool,
             read_constraint_file_tool,
             validate_checkpoint_file_tool,
-            find_images_tool,
-            get_image_tool,
+            *build_image_agent_tools(),
         ]
 
     def write_checkpoint_file(self, *, content: str, path: str = DEFAULT_CHECKPOINT_PATH) -> dict[str, Any]:

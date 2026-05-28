@@ -42,8 +42,8 @@ def _has_physical_constraints(state: PhysicalState, ground_artifact: dict) -> bo
 
 def _defaults_by_node_type() -> dict[str, dict]:
     return {
-        "computer": _image_default("img_ubuntu_22"),
-        "router": _image_default("img_router_linux"),
+        "computer": _image_default("ubuntu_22"),
+        "router": {"image": None, "flavor": None},
         "switch": {"image": None, "flavor": None},
     }
 

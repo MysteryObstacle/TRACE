@@ -18,7 +18,10 @@ def f4_intent(graph: TGraph, context: ValidationContext | None = None) -> list[V
     if context.preserve_topology_from is not None:
         issues.extend(_preserve_topology(graph, context.preserve_topology_from))
 
-    issues.extend(_required_node_fields(graph, context.required_node_fields))
+    if context.required_node_fields_for_types:
+        issues.extend(_required_node_fields_for_types(graph, context.required_node_fields_for_types))
+    else:
+        issues.extend(_required_node_fields(graph, context.required_node_fields))
     issues.extend(_required_link_fields(graph, context.required_link_fields))
     issues.extend(_run_checkpoint_files(graph, context))
     return issues
@@ -122,6 +125,22 @@ def _preserve_topology(graph: TGraph, source: TGraph) -> list[ValidationIssue]:
 def _required_node_fields(graph: TGraph, fields: list[str]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for node in graph.nodes:
+        for field in fields:
+            if not getattr(node, field, None):
+                issues.append(
+                    validation_issue(
+                        "missing_required_node_field",
+                        f"node {node.id} is missing required field: {field}",
+                        location=f"nodes.{node.id}.{field}",
+                    )
+                )
+    return issues
+
+
+def _required_node_fields_for_types(graph: TGraph, fields_by_type: dict[str, list[str]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for node in graph.nodes:
+        fields = fields_by_type.get(node.type, [])
         for field in fields:
             if not getattr(node, field, None):
                 issues.append(

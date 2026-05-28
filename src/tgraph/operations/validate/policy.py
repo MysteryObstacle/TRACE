@@ -21,6 +21,7 @@ class ValidationContext(BaseModel):
 
     preserve_topology_from: TGraph | None = None
     required_node_fields: list[str] = Field(default_factory=list)
+    required_node_fields_for_types: dict[str, list[str]] = Field(default_factory=dict)
     required_link_fields: list[str] = Field(default_factory=list)
     constraint_files: dict[str, str | Path] = Field(default_factory=dict)
     checkpoint_files: dict[str, str | Path] = Field(default_factory=dict)

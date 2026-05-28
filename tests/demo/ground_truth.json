@@ -79,38 +79,38 @@
       },
   
       { "id": "WEB", "type": "computer", "label": "WEB",
-        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "image": { "id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud" },
         "flavor": { "vcpu": 2, "ram": 2048, "disk": 20 },
         "ports": [ { "id": "p_web0", "ip": "", "cidr": "" } ]
       },
       { "id": "PC1", "type": "computer", "label": "PC1",
-        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "image": { "id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud" },
         "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
         "ports": [ { "id": "p_pc1_0", "ip": "", "cidr": "" } ]
       },
       { "id": "PC2", "type": "computer", "label": "PC2",
-        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "image": { "id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud" },
         "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
         "ports": [ { "id": "p_pc2_0", "ip": "", "cidr": "" } ]
       },
       { "id": "PLC1", "type": "computer", "label": "PLC1",
-        "image": { "id": "img-tiny-linux", "name": "tiny-linux" },
+        "image": { "id": "tiny_linux", "name": "Tiny Linux" },
         "flavor": { "vcpu": 1, "ram": 512, "disk": 5 },
         "ports": [ { "id": "p_plc1_0", "ip": "", "cidr": "" } ]
       },
       { "id": "ADMIN", "type": "computer", "label": "ADMIN",
-        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "image": { "id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud" },
         "flavor": { "vcpu": 2, "ram": 2048, "disk": 20 },
         "ports": [ { "id": "p_admin0", "ip": "", "cidr": "" } ]
       },
       { "id": "BPC1", "type": "computer", "label": "BPC1",
-        "image": { "id": "img-ubuntu-22", "name": "ubuntu-22.04" },
+        "image": { "id": "ubuntu_22", "name": "Ubuntu 22.04 LTS Cloud" },
         "flavor": { "vcpu": 1, "ram": 1024, "disk": 10 },
         "ports": [ { "id": "p_bpc1_0", "ip": "", "cidr": "" } ]
       },
   
       { "id": "FIREWALL", "type": "computer", "label": "FIREWALL",
-        "image": { "id": "img-fw", "name": "firewall-image" },
+        "image": { "id": "pfsense", "name": "pfSense Community Edition" },
         "flavor": { "vcpu": 2, "ram": 2048, "disk": 10 },
         "ports": [
           { "id": "p_fw_inside", "ip": "10.0.0.2", "cidr": "10.0.0.0/30" },
@@ -118,7 +118,7 @@
         ]
       },
       { "id": "INTERNET", "type": "computer", "label": "INTERNET",
-        "image": { "id": "img-inet", "name": "internet-node" },
+        "image": { "id": "linux_internet_gateway", "name": "Linux Internet Gateway" },
         "flavor": { "vcpu": 1, "ram": 512, "disk": 5 },
         "ports": [
           { "id": "p_inet0", "ip": "10.0.0.6", "cidr": "10.0.0.4/30" }

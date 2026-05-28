@@ -51,7 +51,7 @@ def test_physical_prepare_copies_logical_graph_with_defaults_and_ground_constrai
                 {
                     "pc1": {
                         "kind": "physical.image.exact",
-                        "statement": "R1 uses image img_router_linux.",
+                        "statement": "R1 is a router without deployment image.",
                     }
                 }
             )
@@ -63,8 +63,8 @@ def test_physical_prepare_copies_logical_graph_with_defaults_and_ground_constrai
     graph = result["draft_artifact"]["graph"]
 
     assert graph["stage"] == "physical"
-    assert graph["nodes"][0]["image"]["id"] == "img_router_linux"
-    assert graph["nodes"][0]["flavor"] == {"vcpu": 2, "ram": 2048, "disk": 10}
+    assert graph["nodes"][0]["image"] is None
+    assert graph["nodes"][0]["flavor"] is None
     assert result["draft_artifact"]["constraint_files"]["physical"] == PHYSICAL_CONSTRAINTS_PATH
     assert PHYSICAL_CONSTRAINTS_PATH in result["support_files"]
 

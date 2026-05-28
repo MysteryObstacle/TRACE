@@ -10,7 +10,7 @@ tgraph.check_chain(["WEB", "SW_DMZ", "R_CORE"])
 tgraph.check_ring(["R1", "R2", "R3", "R1"])
 tgraph.check_star(center="SW_CORE", leaves=["PC1", "PC2"])
 tgraph.check_mesh(["R1", "R2", "R3"])
-tgraph.check_image_exact("WEB", "img_web")
+tgraph.check_image_exact("WEB", "ubuntu_22")
 tgraph.check_flavor_minimum("WEB", vcpu=2, ram=2048, disk=20)
 tgraph.check_flavor_exact("WEB", vcpu=2, ram=2048, disk=20)
 ```

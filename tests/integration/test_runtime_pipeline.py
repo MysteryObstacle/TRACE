@@ -134,7 +134,7 @@ def test_trace_runtime_runs_all_stages_and_persists_outputs(tmp_path):
                             "payload": {
                                 "content": (
                                     "def check_p1(tgraph):\n"
-                                    "    return tgraph.check_image_exact('PLC1', 'img_openplc')\n"
+                                    "    return tgraph.check_image_exact('PLC1', 'openplc')\n"
                                 ),
                             },
                         },

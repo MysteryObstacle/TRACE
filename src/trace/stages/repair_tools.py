@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from langchain.tools import tool
+from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from tgraph import TGraph, inspect_graph as _inspect_graph_view, validate_graph
 from tgraph.operations.mutate import execute_mutation_file
 from tgraph.operations.validate import ValidationContext
 from trace.stages.support_files import _FilterParams, filtered_view
-from trace.tools.images.catalog import find_images, get_image
+from trace.tools.images.agent_surface import build_image_agent_tools
 
 
 class MutationSummary(BaseModel):
@@ -178,20 +179,30 @@ class _WriteMutationFileInput(BaseModel):
 
 
 class _ExecuteMutationFileInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     path: str
-    run_validate: bool = Field(default=True, alias="validate")
+    run_validate: bool = Field(default=False, alias="validate")
     include_graph: bool = False
+    include_operations: bool = False
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        kwargs["by_alias"] = True
+        return super().model_json_schema(*args, **kwargs)
+
+    @classmethod
+    def schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        kwargs["by_alias"] = True
+        return super().schema(*args, **kwargs)
 
 
-class _FindImagesInput(BaseModel):
-    query: str | None = None
-    roles: list[str] | None = None
-    node_type: str | None = None
-    limit: int = 10
-
-
-class _GetImageInput(BaseModel):
-    image_id: str
+class _AliasArgsStructuredTool(StructuredTool):
+    @property
+    def args(self) -> dict:
+        if self.args_schema is not None:
+            return self.args_schema.model_json_schema(by_alias=True)["properties"]
+        return super().args
 
 
 class StageRepairTools:
@@ -215,6 +226,7 @@ class StageRepairTools:
             else None
         )
         self._mutation_index = max(1, mutation_index_seed, self._next_existing_mutation_index())
+        self._state_change_closed_reason: str | None = None
 
     def artifact_state(self) -> dict[str, Any]:
         return deepcopy(self._artifact)
@@ -222,7 +234,13 @@ class StageRepairTools:
     def support_files(self) -> dict[str, str]:
         return dict(self._support_files)
 
-    def as_agent_tools(self, *, include_checkpoint_tool: bool = True, include_image_tools: bool = False) -> list[Any]:
+    def as_agent_tools(
+        self,
+        *,
+        include_checkpoint_tool: bool = True,
+        include_image_tools: bool = False,
+        include_validate_tool: bool = False,
+    ) -> list[Any]:
         @tool("inspect_graph", args_schema=_InspectGraphToolInput)
         def inspect_graph_tool(
             view: str = "summary",
@@ -233,7 +251,7 @@ class StageRepairTools:
             against: str | None = None,
             baseline_attempt_id: int | None = None,
         ) -> dict[str, Any]:
-            """Inspect the current graph. Views: summary, node, links, path, cidrs, diff. For view='diff' pass against='previous_attempt' or 'logical_reference' (and optionally baseline_attempt_id for previous_attempt)."""
+            """Inspect the current graph. Views: summary, nodes, node, links, path, cidrs, diff. For view='diff' pass against='previous_attempt' or 'logical_reference'."""
 
             kwargs = {"node_id": node_id, "port_id": port_id, "source": source, "target": target}
             kwargs = {key: value for key, value in kwargs.items() if value is not None}
@@ -267,11 +285,27 @@ class StageRepairTools:
 
             return self.write_mutation_file(content=content, path=path)
 
-        @tool("execute_mutation_file", args_schema=_ExecuteMutationFileInput)
-        def execute_mutation_file_tool(path: str, run_validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
-            """Execute a mutation file transactionally. Returns ok + operations + summary; pass include_graph=true to also receive the full graph."""
+        def _execute_mutation_file_tool(
+            path: str,
+            run_validate: bool = False,
+            include_graph: bool = False,
+            include_operations: bool = False,
+        ) -> dict[str, Any]:
+            """Execute a mutation file transactionally. By default this applies only; the validator node runs full validation."""
 
-            return self.execute_mutation_file(path=path, validate=run_validate, include_graph=include_graph)
+            return self.execute_mutation_file(
+                path=path,
+                validate=run_validate,
+                include_graph=include_graph,
+                include_operations=include_operations,
+            )
+
+        execute_mutation_file_tool = _AliasArgsStructuredTool.from_function(
+            func=_execute_mutation_file_tool,
+            name="execute_mutation_file",
+            description="Execute a mutation file transactionally. By default this applies only; the validator node runs full validation.",
+            args_schema=_ExecuteMutationFileInput,
+        )
 
         @tool("validate_graph")
         def validate_graph_tool() -> dict[str, Any]:
@@ -290,33 +324,14 @@ class StageRepairTools:
             read_support_file_tool,
             write_mutation_file_tool,
             execute_mutation_file_tool,
-            validate_graph_tool,
             list_support_files_tool,
         ]
+        if include_validate_tool:
+            tools.insert(4, validate_graph_tool)
         if include_checkpoint_tool:
             tools.insert(2, write_checkpoint_file_tool)
         if include_image_tools:
-            @tool("find_images", args_schema=_FindImagesInput)
-            def find_images_tool(
-                query: str | None = None,
-                roles: list[str] | None = None,
-                node_type: str | None = None,
-                limit: int = 10,
-            ) -> dict[str, Any]:
-                """Search the image catalog by free-text query, role list, or node type. Returns ranked candidate images with default_flavor."""
-
-                return {"images": find_images(query=query, roles=roles, node_type=node_type, limit=limit)}
-
-            @tool("get_image", args_schema=_GetImageInput)
-            def get_image_tool(image_id: str) -> dict[str, Any]:
-                """Look up a specific image_id in the catalog. Returns image, roles, node_types, aliases, default_flavor."""
-
-                try:
-                    return get_image(image_id)
-                except KeyError as exc:
-                    return {"ok": False, "error": {"message": str(exc)}}
-
-            tools.extend([find_images_tool, get_image_tool])
+            tools.extend(build_image_agent_tools())
         return tools
 
     def inspect_graph(
@@ -330,12 +345,19 @@ class StageRepairTools:
         param_error = _inspect_view_param_error(view=view, kwargs=kwargs)
         if param_error is not None:
             return param_error
+        if view == "nodes":
+            return _nodes_view(self._graph_model())
         if view == "diff":
             baseline_graph = self._resolve_diff_baseline(against=against, baseline_attempt_id=baseline_attempt_id)
             if isinstance(baseline_graph, dict) and baseline_graph.get("ok") is False:
                 return baseline_graph
             return _inspect_graph_view(self._graph_model(), view="diff", baseline=baseline_graph)
-        return _inspect_graph_view(self._graph_model(), view=view, **kwargs)
+        if view not in _ALLOWED_INSPECT_VIEWS:
+            return _unknown_inspect_view(view)
+        try:
+            return _inspect_graph_view(self._graph_model(), view=view, **kwargs)
+        except ValueError as exc:
+            return {"ok": False, "error": {"message": str(exc)}, "allowed_views": sorted(_ALLOWED_INSPECT_VIEWS)}
 
     def read_support_file(
         self,
@@ -347,14 +369,29 @@ class StageRepairTools:
     ) -> dict[str, Any]:
         normalized = _safe_relative_path(path)
         if normalized not in self._support_files:
-            return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
+            catalog = _read_catalog_file(normalized)
+            if catalog is not None:
+                doc_path, doc_content = catalog
+                content = filtered_view(doc_content, match=match, keys=keys, head_lines=head_lines)
+                return {"ok": True, "path": doc_path, "content": content}
+            doc = _read_agent_doc(normalized)
+            if doc is None:
+                return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
+            doc_path, doc_content = doc
+            content = filtered_view(doc_content, match=match, keys=keys, head_lines=head_lines)
+            return {"ok": True, "path": doc_path, "content": content}
         content = filtered_view(self._support_files[normalized], match=match, keys=keys, head_lines=head_lines)
         return {"ok": True, "path": normalized, "content": content}
 
     def list_support_files(self) -> dict[str, Any]:
-        return {"paths": sorted(self._support_files.keys())}
+        support_paths = sorted(self._support_files.keys())
+        agent_docs = _agent_doc_paths()
+        return {"paths": support_paths, "support_files": support_paths, "agent_docs": agent_docs}
 
     def write_checkpoint_file(self, *, path: str, content: str) -> dict[str, Any]:
+        closed = self._closed_response()
+        if closed is not None:
+            return closed
         normalized = _safe_relative_path(path)
         stage = self._graph_model().stage
         expected = f"{stage}/checkpoints.py"
@@ -362,14 +399,34 @@ class StageRepairTools:
             return {"ok": False, "error": {"message": f"{stage} checkpoint file must be {expected}"}}
         self._write_support_file(normalized, content)
         self._artifact.setdefault("checkpoint_files", {})[stage] = normalized
-        return {"ok": True, "path": normalized, "checkpoint_files": deepcopy(self._artifact.get("checkpoint_files", {}))}
+        self._state_change_closed_reason = f"checkpoint file written at {normalized}; return control to the validator"
+        return {
+            "ok": True,
+            "path": normalized,
+            "checkpoint_files": deepcopy(self._artifact.get("checkpoint_files", {})),
+            "stop": True,
+            "next": "return control to validator",
+        }
 
     def write_mutation_file(self, *, content: str, path: str | None = None) -> dict[str, Any]:
+        closed = self._closed_response()
+        if closed is not None:
+            return closed
         normalized = _safe_relative_path(path or self._next_mutation_path())
         self._write_support_file(normalized, content)
         return {"ok": True, "path": normalized}
 
-    def execute_mutation_file(self, *, path: str, validate: bool = True, include_graph: bool = False) -> dict[str, Any]:
+    def execute_mutation_file(
+        self,
+        *,
+        path: str,
+        validate: bool = False,
+        include_graph: bool = False,
+        include_operations: bool = False,
+    ) -> dict[str, Any]:
+        closed = self._closed_response()
+        if closed is not None:
+            return closed
         normalized = _safe_relative_path(path)
         if normalized not in self._support_files:
             return {"ok": False, "error": {"message": f"support file not found: {normalized}"}}
@@ -383,6 +440,7 @@ class StageRepairTools:
         operations = list(result.operations or [])
         if result.ok and result.graph is not None:
             self._artifact["graph"] = result.graph.model_dump(mode="json")
+            self._state_change_closed_reason = f"mutation applied from {normalized}; return control to the validator"
 
         snapshot_path: str | None = None
         if result.ok and result.graph is not None:
@@ -404,9 +462,13 @@ class StageRepairTools:
         )
         payload: dict[str, Any] = {
             "ok": result.ok,
-            "operations": [dict(op) for op in operations],
             "summary": summary.model_dump(mode="json"),
         }
+        if result.ok:
+            payload["stop"] = True
+            payload["next"] = "return control to validator"
+        if include_operations:
+            payload["operations"] = [dict(op) for op in operations]
         if not result.ok:
             payload["issues"] = [issue.model_dump(mode="json") for issue in result.issues]
         if include_graph and result.graph is not None:
@@ -520,6 +582,18 @@ class StageRepairTools:
             return TGraph.model_validate(json.loads(self._support_files[candidates[-1]]))
         return {"ok": False, "error": {"message": f"unknown against: {against!r}"}}
 
+    def _closed_response(self) -> dict[str, Any] | None:
+        if self._state_change_closed_reason is None:
+            return None
+        return {
+            "ok": False,
+            "stop": True,
+            "error": {
+                "message": self._state_change_closed_reason,
+            },
+            "next": "return control to validator",
+        }
+
 
 def _safe_relative_path(relative_path: str) -> str:
     raw = str(relative_path or "").replace("\\", "/").strip()
@@ -529,6 +603,9 @@ def _safe_relative_path(relative_path: str) -> str:
     return raw
 
 
+_ALLOWED_INSPECT_VIEWS = {"summary", "nodes", "node", "links", "path", "cidrs", "diff"}
+
+
 def _inspect_view_param_error(*, view: str, kwargs: dict[str, Any]) -> dict[str, Any] | None:
     if view == "node" and not kwargs.get("node_id"):
         return {"ok": False, "error": {"message": "inspect_graph view='node' requires node_id"}}
@@ -536,3 +613,68 @@ def _inspect_view_param_error(*, view: str, kwargs: dict[str, Any]) -> dict[str,
         if not kwargs.get("source") or not kwargs.get("target"):
             return {"ok": False, "error": {"message": "inspect_graph view='path' requires source and target"}}
     return None
+
+
+def _unknown_inspect_view(view: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {"message": f"unknown inspect view: {view}"},
+        "allowed_views": sorted(_ALLOWED_INSPECT_VIEWS),
+    }
+
+
+def _nodes_view(graph: TGraph) -> dict[str, Any]:
+    nodes = [
+        {
+            "id": node.id,
+            "type": node.type,
+            "label": node.label,
+            "port_count": len(node.ports),
+            **({"image": node.image} if node.image is not None else {}),
+            **({"flavor": node.flavor} if node.flavor is not None else {}),
+        }
+        for node in graph.nodes
+    ]
+    return {"ok": True, "stage": graph.stage, "nodes": nodes}
+
+
+def _agent_docs_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "tgraph" / "agent" / "docs"
+
+
+def _agent_doc_paths() -> list[str]:
+    root = _agent_docs_root()
+    if not root.exists():
+        return []
+    return [f"docs/{path.name}" for path in sorted(root.glob("*.md"))]
+
+
+def _read_catalog_file(path: str) -> tuple[str, str] | None:
+    normalized = _safe_relative_path(path)
+    aliases = {
+        "catalog/image_catalog.v1.json",
+        "data/trace/image_catalog.v1.json",
+        "image_catalog.v1.json",
+    }
+    if normalized not in aliases:
+        return None
+    try:
+        from trace.tools.images.loader import catalog_json_path
+
+        catalog_path = catalog_json_path()
+    except ImportError:
+        return None
+    if not catalog_path.is_file():
+        return None
+    return "catalog/image_catalog.v1.json", catalog_path.read_text(encoding="utf-8")
+
+
+def _read_agent_doc(path: str) -> tuple[str, str] | None:
+    normalized = _safe_relative_path(path)
+    doc_name = normalized.removeprefix("docs/")
+    if "/" in doc_name or not doc_name.endswith(".md"):
+        return None
+    doc_path = _agent_docs_root() / doc_name
+    if not doc_path.exists() or not doc_path.is_file():
+        return None
+    return f"docs/{doc_name}", doc_path.read_text(encoding="utf-8")

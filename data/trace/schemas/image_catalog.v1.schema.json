@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trace.local/schemas/image_catalog.v1.schema.json",
+  "title": "TRACE Image Capability Registry v1",
+  "description": "Provider-neutral abstract VM image catalog aligned with OpenStack Image Guide obtain-images, plus TRACE lab extensions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_name", "images"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "catalog_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "catalog_description": {
+      "type": "string"
+    },
+    "images": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/image_entry" }
+    }
+  },
+  "$defs": {
+    "flavor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vcpu", "ram", "disk"],
+      "properties": {
+        "vcpu": { "type": "integer", "minimum": 1 },
+        "ram": { "type": "integer", "minimum": 128 },
+        "disk": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "catalog_group": {
+      "type": "string",
+      "enum": ["openstack_image_guide", "trace_lab", "network_device"]
+    },
+    "maturity": {
+      "type": "string",
+      "enum": ["ga", "preview", "deprecated"]
+    },
+    "image_id": {
+      "type": "string",
+      "pattern": "^(?!img_)[a-z][a-z0-9_]*$",
+      "description": "Canonical image id: lowercase snake_case, must not use img_ prefix."
+    },
+    "legacy_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "catalog_group",
+        "node_types",
+        "roles",
+        "aliases",
+        "legacy_ids",
+        "default_flavor",
+        "maturity",
+        "description"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/image_id" },
+        "name": { "type": "string", "minLength": 1 },
+        "catalog_group": { "$ref": "#/$defs/catalog_group" },
+        "family": { "type": "string" },
+        "os_family": { "type": "string" },
+        "os_version": { "type": "string" },
+        "login_user": { "type": "string" },
+        "cloud_init": { "type": "boolean" },
+        "cloudbase_init": { "type": "boolean" },
+        "requires_subscription": { "type": "boolean" },
+        "disk_formats": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["qcow2", "raw", "vmdk", "vdi", "vhd"] },
+          "uniqueItems": true
+        },
+        "container_format": {
+          "type": "string",
+          "enum": ["bare", "ovf", "docker"]
+        },
+        "hypervisor_hints": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "node_types": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["computer", "router", "switch"] },
+          "uniqueItems": true
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "legacy_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/legacy_id" },
+          "uniqueItems": true
+        },
+        "default_flavor": { "$ref": "#/$defs/flavor" },
+        "maturity": { "$ref": "#/$defs/maturity" },
+        "description": { "type": "string", "minLength": 1 },
+        "source_reference": {
+          "type": "string",
+          "pattern": "^openstack://image-guide/"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "catalog_group": { "const": "openstack_image_guide" } },
+            "required": ["catalog_group"]
+          },
+          "then": {
+            "required": ["os_family", "source_reference"],
+            "properties": {
+              "source_reference": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "catalog_group": { "const": "trace_lab" } },
+            "required": ["catalog_group"]
+          },
+          "then": {
+            "required": ["family"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "catalog_group": { "const": "network_device" } },
+            "required": ["catalog_group"]
+          },
+          "then": {
+            "required": ["family"]
+          }
+        }
+      ]
+    }
+  }
+}

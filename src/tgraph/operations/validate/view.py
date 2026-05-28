@@ -83,6 +83,9 @@ class TGraphView:
         payload = self._node_payloads.get(str(node_id))
         return copy.deepcopy(payload) if payload is not None else None
 
+    def get_node(self, node_id: str) -> dict[str, Any] | None:
+        return self.node(node_id)
+
     def nodes(
         self,
         *,
@@ -124,6 +127,9 @@ class TGraphView:
                 enriched["node"] = owner
                 selected.append(enriched)
         return selected
+
+    def get_ports(self, node_id: str | None = None, *, cidr: str | None = None) -> list[dict[str, Any]]:
+        return self.ports(node_id=node_id, cidr=cidr)
 
     def link(self, link_id: str) -> dict[str, Any] | None:
         payload = self._links_by_id.get(str(link_id))
@@ -305,6 +311,9 @@ class TGraphView:
             return ipaddress.ip_address(str(ip)) in ipaddress.ip_network(str(cidr), strict=False)
         except ValueError:
             return False
+
+    def ip_in_subnet(self, ip: str, cidr: str) -> bool:
+        return self.ip_in_cidr(ip, cidr)
 
     def topology_pairs(self) -> set[tuple[str, str]]:
         pairs: set[tuple[str, str]] = set()
@@ -497,17 +506,18 @@ class TGraphView:
                     details={"expected_image_id": image_id},
                 )
             ]
-        actual = _node_image_id(payload)
-        if actual == image_id:
+        expected = _canonical_image_id(image_id)
+        actual = _canonical_image_id(_node_image_id(payload))
+        if actual == expected:
             return []
         suffix = "missing" if actual is None else "mismatch"
         return [
             _fact_issue(
                 fact_kind,
                 suffix,
-                f"{node} image must be {image_id}",
+                f"{node} image must be {expected}",
                 targets=[node],
-                details={"expected_image_id": image_id, "actual_image_id": actual},
+                details={"expected_image_id": expected, "actual_image_id": actual},
             )
         ]
 
@@ -671,6 +681,22 @@ def _link_addressing(view: TGraphView, link: dict[str, Any]) -> dict[str, Any]:
         "from": {"node": from_node, "port": link.get("from_port"), "ip": (from_port or {}).get("ip"), "cidr": (from_port or {}).get("cidr")},
         "to": {"node": to_node, "port": link.get("to_port"), "ip": (to_port or {}).get("ip"), "cidr": (to_port or {}).get("cidr")},
     }
+
+
+def _canonical_image_id(image_id: str | None) -> str | None:
+    if image_id is None:
+        return None
+    normalized = str(image_id).strip()
+    if not normalized:
+        return None
+    try:
+        from trace.tools.images.loader import resolve_image_id
+
+        return resolve_image_id(normalized)
+    except ImportError:
+        return normalized
+    except KeyError:
+        return normalized
 
 
 def _node_image_id(node: dict[str, Any]) -> str | None:
