@@ -11,6 +11,7 @@ from trace.stages.common import build_messages
 from trace.stages.logical.state import LogicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import LOGICAL_CONSTRAINTS_PATH
+from trace.stages.stage_results import extract_agent_messages
 from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
 
 
@@ -44,7 +45,7 @@ def author_node(state: LogicalState, role_client) -> LogicalState:
     return {
         "author_output": author_tools.artifact_state(),
         "support_files": dict(state.get("support_files") or {}),
-        "messages": _extract_messages(agent_result) or messages,
+        "messages": extract_agent_messages(agent_result) or messages,
         "events": [{"type": "logical.author.completed"}],
     }
 
@@ -268,11 +269,3 @@ def _normalize_checkpoint_path(path: str) -> str:
     if normalized != DEFAULT_CHECKPOINT_PATH:
         raise ValueError(f"logical author checkpoint path must be {DEFAULT_CHECKPOINT_PATH!r}")
     return normalized
-
-
-def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:
-    if isinstance(agent_result, dict):
-        messages = agent_result.get("messages")
-        if isinstance(messages, list):
-            return [item for item in messages if isinstance(item, dict) and item.get("role")]
-    return []

@@ -34,7 +34,7 @@ def test_physical_validator_passes_logical_reference_graph_to_tgraph_validate() 
 def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None:
     state = {
         "draft_artifact": {
-            "constraint_files": {"physical": "physical/constraints.json"},
+            "constraint_files": {"physical": "ground/physical_constraints.json"},
             "checkpoint_files": {"physical": "physical/checkpoints.py"},
             "graph": {
                 "stage": "physical",
@@ -60,7 +60,7 @@ def test_physical_validator_routes_script_exceptions_to_repair(tmp_path) -> None
             "checkpoint_files": {},
         },
         "support_files": {
-            "physical/constraints.json": '{"pc1": {"kind": "physical.custom", "statement": "PLC1 custom physical fact."}}',
+            "ground/physical_constraints.json": '{"pc1": {"kind": "physical.custom", "statement": "PLC1 custom physical fact."}}',
             "physical/checkpoints.py": "def check_pc1(tgraph):\n    raise KeyError('boom')\n",
         },
         "support_file_root": str(tmp_path),

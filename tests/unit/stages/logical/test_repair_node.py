@@ -104,11 +104,11 @@ def test_logical_repair_node_injects_file_refs_and_recent_ledger():
                 ],
                 "links": [],
             },
-            "constraint_files": {"logical": "logical/constraints.json"},
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
             "checkpoint_files": {"logical": "logical/checkpoints.py"},
         },
         "support_files": {
-            "logical/constraints.json": '{"lc1": {"kind": "logical.topology.direct", "statement": "A must connect to B."}}',
+            "ground/logical_constraints.json": '{"lc1": {"kind": "logical.topology.direct", "statement": "A must connect to B."}}',
             "logical/checkpoints.py": "def check_lc1(tgraph):\n    return tgraph.check_direct_link('A', 'B')\n",
         },
         "evaluation_report": {
@@ -168,11 +168,11 @@ def test_logical_repair_node_writes_back_mutated_checkpoint_file():
                 ],
                 "links": [],
             },
-            "constraint_files": {"logical": "logical/constraints.json"},
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
             "checkpoint_files": {"logical": "logical/checkpoints.py"},
         },
         "support_files": {
-            "logical/constraints.json": '{"lc1": {"kind": "logical.custom", "statement": "custom"}}',
+            "ground/logical_constraints.json": '{"lc1": {"kind": "logical.custom", "statement": "custom"}}',
             "logical/checkpoints.py": "def check_lc1(tgraph):\n    raise KeyError('boom')\n",
         },
         "evaluation_report": {"ok": False, "issues": [{"details": {"issue_kind": "checkpoint.execution.exception", "constraint_id": "lc1"}}]},

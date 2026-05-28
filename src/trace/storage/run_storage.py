@@ -44,7 +44,7 @@ class RunStorage:
         if not (source / "artifact.json").exists():
             raise FileNotFoundError(source / "artifact.json")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True, ignore=_ignore_debug_sqlite)
         return target
 
     def append_run_events(self, *, run_id: str, events: list[dict[str, Any]]) -> Path:
@@ -122,3 +122,7 @@ def _safe_relative_support_path(relative_path: str) -> Path:
     if not raw or path.is_absolute() or ".." in path.parts:
         raise ValueError(f"unsafe support file path: {relative_path!r}")
     return path
+
+
+def _ignore_debug_sqlite(_directory: str, names: list[str]) -> set[str]:
+    return {"state.sqlite"} & set(names)

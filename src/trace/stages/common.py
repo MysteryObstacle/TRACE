@@ -61,7 +61,7 @@ def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[
             "attempts_used": final_state.get("attempt", 1),
             "messages": final_state.get("messages", []),
             "tool_journal": [],
-            _stage_history_name(stage_id): final_state.get(_stage_history_name(stage_id), []),
+            stage_history_name(stage_id): final_state.get(stage_history_name(stage_id), []),
             "events": final_state.get("events", []),
             "support_files": final_state.get("support_files", {}),
             "unsolvable_notes": final_state.get("unsolvable_notes", []),
@@ -78,7 +78,7 @@ def require_stage_result(*, stage_id: str, final_state: dict[str, Any]) -> dict[
                 "attempts_used": result.get("attempts_used", 1),
                 "messages": result.get("messages", []),
                 "tool_journal": result.get("tool_journal", []),
-                _stage_history_name(stage_id): result.get(_stage_history_name(stage_id), []),
+                stage_history_name(stage_id): result.get(stage_history_name(stage_id), []),
                 "events": result.get("events", []),
                 "support_files": result.get("support_files", {}),
             }
@@ -96,10 +96,6 @@ def stage_history_name(stage_id: str) -> str:
     if stage_id == "ground":
         return "retry_history"
     return "repair_history"
-
-
-def _stage_history_name(stage_id: str) -> str:
-    return stage_history_name(stage_id)
 
 
 def _format_context_value(value: Any) -> str:

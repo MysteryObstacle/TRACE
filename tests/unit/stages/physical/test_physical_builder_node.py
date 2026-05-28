@@ -33,11 +33,11 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
                 ],
                 "links": [],
             },
-            "constraint_files": {"physical": "physical/constraints.json"},
+            "constraint_files": {"physical": "ground/physical_constraints.json"},
             "checkpoint_files": {},
         },
         "support_files": {
-            "physical/constraints.json": (
+            "ground/physical_constraints.json": (
                 '{"pc1": {"kind": "physical.image.exact", "statement": "PLC1 uses image img_openplc."}}'
             ),
             "physical/checkpoints.py": (
@@ -67,11 +67,11 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
             _call_tool(
                 bound["write_mutation_file"],
                 {
-                    "path": "physical/mutations/build.py",
+                    "path": "physical/mutations/attempt_1.py",
                     "content": "def mutate(tgraph):\n    tgraph.set_image('PLC1', 'img_openplc', name='OpenPLC')\n",
                 },
             )
-            _call_tool(bound["execute_mutation_file"], {"path": "physical/mutations/build.py", "validate": True})
+            _call_tool(bound["execute_mutation_file"], {"path": "physical/mutations/attempt_1.py", "validate": True})
             return {"messages": [{"role": "assistant", "content": "physical build complete"}]}
 
     client = FakeRoleClient()
@@ -102,7 +102,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
     assert "[graph_summary]" not in human_content
     assert result["draft_artifact"]["graph"]["nodes"][0]["image"]["id"] == "img_openplc"
     assert result["draft_artifact"]["checkpoint_files"] == {"physical": "physical/checkpoints.py"}
-    assert result["draft_artifact"]["constraint_files"] == {"physical": "physical/constraints.json"}
+    assert result["draft_artifact"]["constraint_files"] == {"physical": "ground/physical_constraints.json"}
     assert "working_graph" not in result
     assert "checkpoints" not in result["draft_artifact"]
     assert "validator_script" not in result["draft_artifact"]

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import ast
 import multiprocessing as mp
 from pathlib import Path
-import queue
-import threading
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from tgraph.core.graph import TGraph
-from tgraph.operations._execution_mode import use_inline_execution
-from tgraph.operations._subprocess_runner import read_subprocess_result, terminate_subprocess_worker
+from tgraph.operations._sandbox_runner import (
+    disallowed_imports,
+    guarded_import,
+    parse_source,
+    read_source_file,
+    run_sandbox_worker,
+)
 from tgraph.operations.mutate.editor import TGraphEditor
 from tgraph.operations.validate.issues import ValidationIssue, validation_issue
 from tgraph.operations.validate.policy import ValidationContext, ValidationPolicy
@@ -38,13 +40,12 @@ def execute_mutation_file(
     path = Path(mutation_path)
     source_path = str(path).replace("\\", "/")
     current = graph if isinstance(graph, TGraph) else TGraph.model_validate(graph)
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    source, read_error = read_source_file(path)
+    if read_error is not None or source is None:
         return _failed(
             _file_issue(
                 "mutation.file.read_error",
-                f"failed to read mutation file: {exc}",
+                f"failed to read mutation file: {read_error}",
                 source_path=source_path,
             )
         )
@@ -54,67 +55,37 @@ def execute_mutation_file(
         return _failed(preflight_issue)
 
     worker_args = (current.model_dump(mode="json"), source, source_path)
-    if use_inline_execution():
-        result_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        worker = threading.Thread(
-            target=_mutation_worker,
-            args=(result_queue, *worker_args),
-            daemon=True,
+    worker_result = run_sandbox_worker(
+        target=_mutation_worker,
+        args=worker_args,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = worker_result.payload
+    if worker_result.timed_out:
+        return _failed(
+            _file_issue(
+                "mutation.execution.timeout",
+                f"mutation file exceeded timeout of {timeout_seconds} seconds",
+                source_path=source_path,
+                details={"timeout_seconds": timeout_seconds, "scope": "file"},
+            )
         )
-        worker.start()
-        worker.join(timeout_seconds)
-        if worker.is_alive():
-            return _failed(
-                _file_issue(
-                    "mutation.execution.timeout",
-                    f"mutation file exceeded timeout of {timeout_seconds} seconds",
-                    source_path=source_path,
-                    details={"timeout_seconds": timeout_seconds, "scope": "file"},
-                )
+    if payload is None:
+        return _failed(
+            _file_issue(
+                "mutation.execution.exception",
+                "mutation file exited without a result",
+                source_path=source_path,
+                details={"scope": "file"},
             )
-        try:
-            payload = result_queue.get_nowait()
-        except queue.Empty:
-            return _failed(
-                _file_issue(
-                    "mutation.execution.exception",
-                    "mutation file exited without a result",
-                    source_path=source_path,
-                    details={"scope": "file"},
-                )
-            )
-    else:
-        context = mp.get_context("spawn")
-        result_queue = context.Queue()
-        worker = context.Process(target=_mutation_worker, args=(result_queue, *worker_args))
-        worker.start()
-        payload = read_subprocess_result(worker, result_queue, timeout_seconds)
-        if payload is None:
-            if worker.is_alive():
-                terminate_subprocess_worker(worker)
-                return _failed(
-                    _file_issue(
-                        "mutation.execution.timeout",
-                        f"mutation file exceeded timeout of {timeout_seconds} seconds",
-                        source_path=source_path,
-                        details={"timeout_seconds": timeout_seconds, "scope": "file"},
-                    )
-                )
-            return _failed(
-                _file_issue(
-                    "mutation.execution.exception",
-                    "mutation file exited without a result",
-                    source_path=source_path,
-                    details={"scope": "file"},
-                )
-            )
+        )
 
     issues = [ValidationIssue.model_validate(item) for item in payload.get("issues", [])]
     if issues:
         return MutationExecutionResult(ok=False, issues=issues, operations=payload.get("operations", []))
 
     candidate = TGraph.model_validate(payload["graph"])
-    validation = validate_graph(candidate, validation_policy or ValidationPolicy(levels=["f1", "f2", "f3"]), validation_context) if validate else None
+    validation = validate_graph(candidate, validation_policy or ValidationPolicy(), validation_context) if validate else None
     if validation is not None and not validation.ok:
         return MutationExecutionResult(ok=False, issues=validation.issues, operations=payload.get("operations", []))
 
@@ -128,7 +99,7 @@ def _mutation_worker(
     source_path: str,
 ) -> None:
     try:
-        globals_dict = {"__builtins__": {**SAFE_BUILTINS, "__import__": _mutation_import}}
+        globals_dict = {"__builtins__": {**SAFE_BUILTINS, "__import__": guarded_import(ALLOWED_MODULES, file_kind="mutation")}}
         exec(compile(source, source_path, "exec"), globals_dict, globals_dict)  # noqa: S102
         mutate = globals_dict.get("mutate")
         if not callable(mutate):
@@ -167,7 +138,9 @@ def _mutation_worker(
 
 def _preflight(source: str, *, source_path: str) -> ValidationIssue | None:
     try:
-        tree = ast.parse(source, filename=source_path)
+        tree, syntax_error = parse_source(source, source_path=source_path)
+        if syntax_error is not None or tree is None:
+            raise syntax_error
     except SyntaxError as exc:
         return _file_issue(
             "mutation.file.syntax_error",
@@ -176,7 +149,7 @@ def _preflight(source: str, *, source_path: str) -> ValidationIssue | None:
             details={"line": exc.lineno, "offset": exc.offset},
         )
 
-    disallowed = sorted(module for module in _imported_modules(tree) if module not in ALLOWED_MODULES)
+    disallowed = disallowed_imports(tree, ALLOWED_MODULES)
     if disallowed:
         return _file_issue(
             "mutation.file.disallowed_import",
@@ -185,23 +158,6 @@ def _preflight(source: str, *, source_path: str) -> ValidationIssue | None:
             details={"modules": disallowed},
         )
     return None
-
-
-def _mutation_import(name: str, globals: dict[str, Any] | None = None, locals: dict[str, Any] | None = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
-    del globals, locals, fromlist, level
-    if name in ALLOWED_MODULES:
-        return ALLOWED_MODULES[name]
-    raise ImportError(f"module '{name}' is not available in mutation files")
-
-
-def _imported_modules(tree: ast.AST) -> set[str]:
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module.split(".")[0])
-    return modules
 
 
 def _file_issue(

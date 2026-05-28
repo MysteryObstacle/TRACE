@@ -35,7 +35,7 @@ def test_physical_artifact_rejects_wrong_stage() -> None:
         PhysicalArtifact.model_validate(
             {
                 "graph": {"stage": "logical", "nodes": [], "links": []},
-                "constraint_files": {"physical": "physical/constraints.json"},
+                "constraint_files": {"physical": "ground/physical_constraints.json"},
                 "checkpoint_files": {"physical": "physical/checkpoints.py"},
             }
         )

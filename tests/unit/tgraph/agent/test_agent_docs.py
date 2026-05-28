@@ -37,3 +37,11 @@ def test_checkpoint_authoring_mentions_check_chain_and_repair_target():
 def test_mutation_authoring_mentions_ensure_direct_link():
     text = (DOCS / "mutation_authoring.md").read_text(encoding="utf-8")
     assert "ensure_direct_link" in text
+
+
+def test_agent_docs_use_canonical_ground_constraint_paths():
+    docs = "\n\n".join(path.read_text(encoding="utf-8") for path in DOCS.glob("*.md"))
+    assert "ground/logical_constraints.json" in docs
+    assert "ground/physical_constraints.json" in docs
+    assert "logical/constraints.json" not in docs
+    assert "physical/constraints.json" not in docs

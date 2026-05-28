@@ -214,7 +214,7 @@ class StageRepairTools:
             if logical_reference_graph is not None
             else None
         )
-        self._mutation_index = max(1, mutation_index_seed)
+        self._mutation_index = max(1, mutation_index_seed, self._next_existing_mutation_index())
 
     def artifact_state(self) -> dict[str, Any]:
         return deepcopy(self._artifact)
@@ -472,6 +472,20 @@ class StageRepairTools:
         path = f"{stage}/mutations/attempt_{self._mutation_index}.py"
         self._mutation_index += 1
         return path
+
+    def _next_existing_mutation_index(self) -> int:
+        stage = self._graph_model().stage
+        highest = 0
+        patterns = (
+            re.compile(rf"^{re.escape(stage)}/mutations/attempt_(\d+)\.py$"),
+            re.compile(rf"^{re.escape(stage)}/mutations/snapshots/attempt_(\d+)\.json$"),
+        )
+        for path in self._support_files:
+            for pattern in patterns:
+                match = pattern.match(path)
+                if match:
+                    highest = max(highest, int(match.group(1)))
+        return highest + 1 if highest else 1
 
     def _attempt_id_for_mutation_path(self, path: str) -> int | None:
         match = re.match(r"^[^/]+/mutations/attempt_(\d+)\.py$", path)

@@ -22,11 +22,11 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
                 ],
                 "links": [],
             },
-            "constraint_files": {"logical": "logical/constraints.json"},
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
             "checkpoint_files": {},
         },
         "support_files": {
-            "logical/constraints.json": (
+            "ground/logical_constraints.json": (
                 '{"lc1": {"kind": "logical.topology.direct", "statement": "PLC1 directly connects to SW1."}}'
             )
         },
@@ -57,11 +57,11 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
             _call_tool(
                 bound["write_mutation_file"],
                 {
-                    "path": "logical/mutations/build.py",
+                    "path": "logical/mutations/attempt_1.py",
                     "content": "def mutate(tgraph):\n    tgraph.ensure_direct_link('PLC1', 'SW1')\n",
                 },
             )
-            _call_tool(bound["execute_mutation_file"], {"path": "logical/mutations/build.py", "validate": True})
+            _call_tool(bound["execute_mutation_file"], {"path": "logical/mutations/attempt_1.py", "validate": True})
             return {"messages": [{"role": "assistant", "content": "logical build complete"}]}
 
     client = FakeRoleClient()
@@ -81,9 +81,9 @@ def test_logical_builder_uses_agent_mutation_tools_without_working_graph_context
     ]
     assert "write_checkpoint_file" not in client.calls[0]["tool_names"]
     assert graph["links"][0]["id"] == "PLC1-SW1-1"
-    assert "logical/mutations/build.py" in result["support_files"]
+    assert "logical/mutations/attempt_1.py" in result["support_files"]
     assert result["draft_artifact"]["checkpoint_files"] == {"logical": "logical/checkpoints.py"}
-    assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
+    assert result["draft_artifact"]["constraint_files"] == {"logical": "ground/logical_constraints.json"}
     assert "working_graph" not in result
     assert "[working_graph]" not in human_content
     assert "[graph_summary]" not in human_content
@@ -102,10 +102,10 @@ def test_logical_builder_keeps_seed_graph_when_agent_does_not_execute_mutation(t
                 ],
                 "links": [],
             },
-            "constraint_files": {"logical": "logical/constraints.json"},
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
             "checkpoint_files": {},
         },
-        "support_files": {"logical/constraints.json": "{}"},
+        "support_files": {"ground/logical_constraints.json": "{}"},
         "support_file_root": str(tmp_path),
         "author_output": {"checkpoint_files": {}},
         "attempt": 1,
@@ -119,7 +119,7 @@ def test_logical_builder_keeps_seed_graph_when_agent_does_not_execute_mutation(t
     result = _merge_logical_partial(state, builder_node(state, FakeRoleClient()))
 
     assert result["draft_artifact"]["graph"]["links"] == []
-    assert result["draft_artifact"]["constraint_files"] == {"logical": "logical/constraints.json"}
+    assert result["draft_artifact"]["constraint_files"] == {"logical": "ground/logical_constraints.json"}
     assert "checkpoints" not in result["draft_artifact"]
     assert "validator_script" not in result["draft_artifact"]
 

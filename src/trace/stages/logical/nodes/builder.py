@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
 from trace.stages.common import build_messages
 from trace.stages.logical.state import LogicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.repair_tools import StageRepairTools
+from trace.stages.stage_results import extract_agent_messages
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "builder.md"
@@ -43,7 +42,7 @@ def builder_node(state: LogicalState, role_client) -> LogicalState:
     return {
         "draft_artifact": tools.artifact_state(),
         "support_files": tools.support_files(),
-        "messages": _extract_messages(agent_result) or messages,
+        "messages": extract_agent_messages(agent_result) or messages,
         "events": [
             {
                 "type": "logical.builder.completed",
@@ -51,11 +50,3 @@ def builder_node(state: LogicalState, role_client) -> LogicalState:
             }
         ],
     }
-
-
-def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:
-    if isinstance(agent_result, dict):
-        messages = agent_result.get("messages")
-        if isinstance(messages, list):
-            return [item for item in messages if isinstance(item, dict) and item.get("role")]
-    return []

@@ -1,5 +1,6 @@
 from tgraph import TGraph
 from tgraph.operations.mutate.scripts import execute_mutation_file
+from tgraph.operations.validate import ValidationContext
 
 
 def _graph() -> TGraph:
@@ -114,6 +115,72 @@ def mutate(tgraph):
     assert result.ok is True
     assert result.graph is not None
     assert [link.id for link in result.graph.links] == ["SW_DMZ-WEB-1"]
+
+
+def test_spawn_path_drains_large_graph_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("TGRAPH_EXECUTION_MODE", raising=False)
+    graph = TGraph.model_validate(
+        {
+            "stage": "logical",
+            "nodes": [
+                {"id": f"N{index}", "type": "computer", "label": f"N{index}", "ports": []}
+                for index in range(180)
+            ],
+            "links": [],
+        }
+    )
+    mutation_path = tmp_path / "attempt_1.py"
+    mutation_path.write_text(
+        """
+def mutate(tgraph):
+    tgraph.ensure_direct_link("N0", "N179")
+""",
+        encoding="utf-8",
+    )
+
+    result = execute_mutation_file(graph, mutation_path=mutation_path, timeout_seconds=5.0)
+
+    assert result.ok is True
+    assert result.graph is not None
+    assert result.graph.links[0].id == "N0-N179-1"
+
+
+def test_mutation_file_validate_true_runs_checkpoint_f4_context(tmp_path) -> None:
+    constraints_path = tmp_path / "constraints.json"
+    constraints_path.write_text(
+        """
+{
+  "lc1": {
+    "kind": "logical.topology.direct",
+    "statement": "WEB must connect directly to SW_DMZ."
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    checkpoint_path = tmp_path / "checkpoints.py"
+    checkpoint_path.write_text(
+        """
+def check_lc1(tgraph):
+    return tgraph.check_direct_link("WEB", "SW_DMZ")
+""",
+        encoding="utf-8",
+    )
+    mutation_path = tmp_path / "attempt_1.py"
+    mutation_path.write_text("def mutate(tgraph):\n    pass\n", encoding="utf-8")
+
+    result = execute_mutation_file(
+        _graph(),
+        mutation_path=mutation_path,
+        validate=True,
+        validation_context=ValidationContext(
+            constraint_files={"logical": constraints_path},
+            checkpoint_files={"logical": checkpoint_path},
+        ),
+    )
+
+    assert result.ok is False
+    assert _issue_kinds(result) == ["logical.topology.direct.missing_edge"]
 
 
 def _issue_kinds(result):

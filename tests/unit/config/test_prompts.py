@@ -66,11 +66,12 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
     builder_prompt = _prompt("src/trace/stages/logical/prompts/builder.md")
     repair_prompt = _prompt("src/trace/stages/logical/prompts/repair.md")
 
-    assert "logical/constraints.json" in author_prompt
-    assert "ground/logical_constraints.json" not in author_prompt
+    assert "ground/logical_constraints.json" in author_prompt
+    assert "logical/constraints.json" not in author_prompt
     assert "logical/checkpoints.py" in author_prompt
     assert "write_checkpoint_file" in author_prompt
     assert "validate_checkpoint_file" in author_prompt
+    assert "tgraph.escalate" in author_prompt
     assert "check_<constraint_id>" in author_prompt
     assert "logical_checkpoints" not in author_prompt
     assert "logical_validator_script" not in author_prompt
@@ -78,7 +79,9 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
 
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
-    assert "logical/mutations/build.py" in builder_prompt
+    assert "logical/mutations/attempt_N.py" in builder_prompt
+    assert "logical/mutations/build.py" not in builder_prompt
+    assert "logical/constraints.json" not in builder_prompt
     assert "LogicalArtifact schema" not in builder_prompt
     assert "working graph" not in builder_prompt.lower()
     assert "working_graph" not in builder_prompt
@@ -94,19 +97,22 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
     builder_prompt = _prompt("src/trace/stages/physical/prompts/builder.md")
     repair_prompt = _prompt("src/trace/stages/physical/prompts/repair.md")
 
-    assert "physical/constraints.json" in author_prompt
-    assert "ground/physical_constraints.json" not in author_prompt
+    assert "ground/physical_constraints.json" in author_prompt
+    assert "physical/constraints.json" not in author_prompt
     assert "find_images" in author_prompt
     assert "get_image" in author_prompt
     assert "physical/checkpoints.py" in author_prompt
     assert "write_checkpoint_file" in author_prompt
     assert "validate_checkpoint_file" in author_prompt
+    assert "tgraph.escalate" in author_prompt
     assert "Kind→Tool" in author_prompt
     assert "tgraph.check_image_exact" in author_prompt
 
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
-    assert "physical/mutations/build.py" in builder_prompt
+    assert "physical/mutations/attempt_N.py" in builder_prompt
+    assert "physical/mutations/build.py" not in builder_prompt
+    assert "physical/constraints.json" not in builder_prompt
     assert "image" in builder_prompt
     assert "flavor" in builder_prompt
     assert "find_images" in builder_prompt

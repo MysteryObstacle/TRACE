@@ -31,7 +31,9 @@ def prepare_node(state: PhysicalState) -> PhysicalState:
 
 
 def _has_physical_constraints(state: PhysicalState, ground_artifact: dict) -> bool:
-    path = ground_artifact.get("constraint_files", {}).get("physical", PHYSICAL_CONSTRAINTS_PATH)
+    path = ground_artifact.get("constraint_files", {}).get("physical")
+    if not path:
+        return False
     content = (state.get("support_files") or {}).get(path)
     if not content:
         return False

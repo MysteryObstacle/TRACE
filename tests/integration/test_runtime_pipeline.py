@@ -193,12 +193,15 @@ def test_trace_runtime_runs_all_stages_and_persists_outputs(tmp_path):
     assert result["artifacts"]["physical"]["graph"]["links"] == result["artifacts"]["logical"]["graph"]["links"]
     assert all("[shared_memory]" not in message["content"] for entry in client.message_log for message in entry["messages"])
     assert (tmp_path / "runs" / "run-001" / "ground" / "artifact.json").exists()
+    assert (tmp_path / "runs" / "run-001" / "ground" / "state.sqlite").exists()
     assert (tmp_path / "runs" / "run-001" / "ground" / "logical_constraints.json").exists()
     assert (tmp_path / "runs" / "run-001" / "ground" / "physical_constraints.json").exists()
     assert (tmp_path / "runs" / "run-001" / "logical" / "messages.json").exists()
+    assert (tmp_path / "runs" / "run-001" / "logical" / "state.sqlite").exists()
     assert (tmp_path / "runs" / "run-001" / "logical" / "checkpoints.py").exists()
     assert not (tmp_path / "runs" / "run-001" / "logical" / "constraints.json").exists()
     assert (tmp_path / "runs" / "run-001" / "physical" / "evaluation.json").exists()
+    assert (tmp_path / "runs" / "run-001" / "physical" / "state.sqlite").exists()
     assert (tmp_path / "runs" / "run-001" / "physical" / "checkpoints.py").exists()
     assert not (tmp_path / "runs" / "run-001" / "physical" / "constraints.json").exists()
 
@@ -258,7 +261,7 @@ def test_trace_runtime_accepts_semantically_identical_physical_links_even_when_o
                         {
                             "tool": "write_mutation_file",
                             "payload": {
-                                "path": "logical/mutations/build.py",
+                                "path": "logical/mutations/attempt_1.py",
                                 "content": (
                                     "def mutate(tgraph):\n"
                                     "    tgraph.ensure_direct_link('R1', 'R2')\n"
@@ -266,7 +269,7 @@ def test_trace_runtime_accepts_semantically_identical_physical_links_even_when_o
                                 ),
                             },
                         },
-                        {"tool": "execute_mutation_file", "payload": {"path": "logical/mutations/build.py", "validate": True}},
+                        {"tool": "execute_mutation_file", "payload": {"path": "logical/mutations/attempt_1.py", "validate": True}},
                     ],
                     "messages": [{"role": "assistant", "content": "logical builder complete"}],
                 }
@@ -472,6 +475,98 @@ def test_trace_runtime_persists_failed_stage_when_logical_builder_raises(tmp_pat
     persisted = json.loads((tmp_path / "runs" / "run-failed" / "run.json").read_text(encoding="utf-8"))
     assert persisted["status"] == "failed"
     assert persisted["current_stage"] == "logical"
+
+
+def test_in_place_resume_uses_nested_logical_checkpoint_without_replaying_author(tmp_path):
+    class FailingOnceLogicalBuilderClient(SequenceRoleClient):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.fail_builder = True
+
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
+            if role_name == "logical_builder" and self.fail_builder:
+                self.fail_builder = False
+                self.calls.append(role_name)
+                self.message_log.append({"role_name": role_name, "messages": messages})
+                raise RuntimeError("logical builder failed once")
+            return super().invoke_agent(role_name=role_name, messages=messages, tools=tools, max_react_steps=max_react_steps)
+
+    client = FailingOnceLogicalBuilderClient(
+        {
+            "ground_author": [
+                {
+                    "node_groups": [{"type": "computer", "members": ["PLC1"]}],
+                    "logical_constraints": [],
+                    "physical_constraints": [],
+                }
+            ],
+            "ground_evaluator": [{"passed": True, "issues": [], "notes": []}],
+            "logical_author": [{"actions": [], "messages": [{"role": "assistant", "content": "logical author complete"}]}],
+            "logical_builder": [{"actions": [], "messages": [{"role": "assistant", "content": "logical builder complete"}]}],
+            "physical_author": [{"actions": [], "messages": [{"role": "assistant", "content": "physical author complete"}]}],
+            "physical_builder": [{"actions": [], "messages": [{"role": "assistant", "content": "physical builder complete"}]}],
+        }
+    )
+    runtime = TraceRuntime(settings=load_settings(), role_client=client, output_root=tmp_path / "runs")
+
+    failed = runtime.run("Build a one-node topology.", run_id="nested-logical")
+    assert failed["status"] == "failed"
+    assert failed["current_stage"] == "logical"
+    assert (tmp_path / "runs" / "nested-logical" / "logical" / "state.sqlite").exists()
+
+    resumed = runtime.resume("nested-logical", from_stage="logical", in_place=True)
+
+    assert resumed["status"] == "completed"
+    assert client.calls.count("ground_author") == 1
+    assert client.calls.count("logical_author") == 1
+    assert client.calls.count("logical_builder") == 2
+    assert client.calls.count("physical_author") == 1
+
+
+def test_in_place_resume_uses_nested_physical_checkpoint_without_replaying_author(tmp_path):
+    class FailingOncePhysicalBuilderClient(SequenceRoleClient):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.fail_builder = True
+
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
+            if role_name == "physical_builder" and self.fail_builder:
+                self.fail_builder = False
+                self.calls.append(role_name)
+                self.message_log.append({"role_name": role_name, "messages": messages})
+                raise RuntimeError("physical builder failed once")
+            return super().invoke_agent(role_name=role_name, messages=messages, tools=tools, max_react_steps=max_react_steps)
+
+    client = FailingOncePhysicalBuilderClient(
+        {
+            "ground_author": [
+                {
+                    "node_groups": [{"type": "computer", "members": ["PLC1"]}],
+                    "logical_constraints": [],
+                    "physical_constraints": [],
+                }
+            ],
+            "ground_evaluator": [{"passed": True, "issues": [], "notes": []}],
+            "logical_author": [{"actions": [], "messages": [{"role": "assistant", "content": "logical author complete"}]}],
+            "logical_builder": [{"actions": [], "messages": [{"role": "assistant", "content": "logical builder complete"}]}],
+            "physical_author": [{"actions": [], "messages": [{"role": "assistant", "content": "physical author complete"}]}],
+            "physical_builder": [{"actions": [], "messages": [{"role": "assistant", "content": "physical builder complete"}]}],
+        }
+    )
+    runtime = TraceRuntime(settings=load_settings(), role_client=client, output_root=tmp_path / "runs")
+
+    failed = runtime.run("Build a one-node topology.", run_id="nested-physical")
+    assert failed["status"] == "failed"
+    assert failed["current_stage"] == "physical"
+    assert (tmp_path / "runs" / "nested-physical" / "physical" / "state.sqlite").exists()
+
+    resumed = runtime.resume("nested-physical", from_stage="physical", in_place=True)
+
+    assert resumed["status"] == "completed"
+    assert client.calls.count("ground_author") == 1
+    assert client.calls.count("logical_author") == 1
+    assert client.calls.count("physical_author") == 1
+    assert client.calls.count("physical_builder") == 2
 
 
 def _ground_artifact():

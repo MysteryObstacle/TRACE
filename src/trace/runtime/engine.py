@@ -12,6 +12,7 @@ from langgraph.types import Command
 from trace.config.settings import TraceSettings, load_settings
 from trace.observability.tracing import TraceObserver
 from trace.runtime.role_client import LangChainRoleClient, RoleClient
+from trace.runtime.stage_checkpoint import StageCheckpointConfig, StageCheckpointUnavailable
 from trace.stages.common import stage_history_name
 from trace.stages.ground import run_ground_stage
 from trace.stages.ground.schemas import GroundArtifact
@@ -104,9 +105,20 @@ class TraceRuntime:
             raise ValueError("new_run_id cannot be used with in_place resume")
 
         sqlite_path = self.storage.root / run_id / "state.sqlite"
+        stage_sqlite_path = self.storage.root / run_id / resume_stage / "state.sqlite"
         target_run_id = run_id if in_place else new_run_id or self._next_resume_run_id(run_id, resume_stage)
         if not in_place and target_run_id == run_id:
             raise ValueError("new_run_id must differ from source run_id unless in_place=True")
+
+        if in_place and stage_sqlite_path.exists():
+            try:
+                return self._resume_via_stage_sqlite(
+                    source_run_id=run_id,
+                    target_run_id=target_run_id,
+                    resume_stage=resume_stage,
+                )
+            except StageCheckpointUnavailable:
+                pass
 
         sqlite_usable = in_place and sqlite_path.exists()
         if sqlite_usable:
@@ -127,6 +139,16 @@ class TraceRuntime:
         run_root.mkdir(parents=True, exist_ok=True)
         sqlite_path = run_root / "state.sqlite"
         return SqliteSaver.from_conn_string(str(sqlite_path))
+
+    def _stage_checkpoint_config(self, run_id: str, stage_id: str, *, resume: bool = False) -> StageCheckpointConfig:
+        run_root = self.storage.root / run_id
+        return StageCheckpointConfig(
+            run_id=run_id,
+            stage_id=stage_id,
+            sqlite_path=run_root / stage_id / "state.sqlite",
+            support_file_root=run_root,
+            resume=resume,
+        )
 
     def _build_run_graph(self, *, entry_stage: str = "ground", checkpointer: SqliteSaver | None = None):
         if entry_stage not in RUN_STAGE_ORDER:
@@ -149,6 +171,11 @@ class TraceRuntime:
                     role_client=self.role_client,
                     settings=self.settings,
                     escalation_report=escalation_report,
+                    checkpoint_config=self._stage_checkpoint_config(
+                        state["run_id"],
+                        "ground",
+                        resume=_resume_stage_requested(state, "ground"),
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "ground", exc)
@@ -177,6 +204,11 @@ class TraceRuntime:
                     inherited_support_files=state.get("support_files", {}),
                     role_client=self.role_client,
                     settings=self.settings,
+                    checkpoint_config=self._stage_checkpoint_config(
+                        state["run_id"],
+                        "logical",
+                        resume=_resume_stage_requested(state, "logical"),
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "logical", exc)
@@ -196,6 +228,11 @@ class TraceRuntime:
                     inherited_support_files=state.get("support_files", {}),
                     role_client=self.role_client,
                     settings=self.settings,
+                    checkpoint_config=self._stage_checkpoint_config(
+                        state["run_id"],
+                        "physical",
+                        resume=_resume_stage_requested(state, "physical"),
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "physical", exc)
@@ -370,6 +407,44 @@ class TraceRuntime:
         )
         return Command(goto=END, update=partial)
 
+    def _resume_via_stage_sqlite(self, *, source_run_id: str, target_run_id: str, resume_stage: str) -> dict[str, Any]:
+        source_state = self.storage.read_run_state(source_run_id)
+        intent = str(source_state.get("intent") or "")
+        initial: RunState = {
+            **source_state,
+            "run_id": target_run_id,
+            "intent": intent,
+            "status": "running",
+            "current_stage": resume_stage,
+            "error": None,
+            "resume": {
+                **(source_state.get("resume") or {}),
+                "source_run_id": source_run_id,
+                "from_stage": resume_stage,
+                "stage_checkpoint_resume": resume_stage,
+            },
+            "events": [
+                *source_state.get("events", []),
+                {
+                    "type": "run.resumed",
+                    "source_run_id": source_run_id,
+                    "from_stage": resume_stage,
+                    "target_run_id": target_run_id,
+                    "mode": "stage_sqlite",
+                },
+            ],
+        }
+        with self._checkpointer_for(target_run_id) as checkpointer:
+            with self.observer.root_run(run_id=target_run_id, intent=intent):
+                graph = self._build_run_graph(entry_stage=resume_stage, checkpointer=checkpointer)
+                final_state = graph.invoke(
+                    initial,
+                    config={"configurable": {"thread_id": f"{target_run_id}:resume:{resume_stage}"}},
+                )
+        self.storage.write_run_state(run_id=target_run_id, run_payload=final_state)
+        self.storage.append_run_events(run_id=target_run_id, events=final_state.get("events", []))
+        return final_state
+
     def _resume_via_sqlite(self, *, source_run_id: str, target_run_id: str, resume_stage: str) -> dict[str, Any]:
         source_state = self.storage.read_run_state(source_run_id)
         intent = str(source_state.get("intent") or "")
@@ -505,6 +580,11 @@ def _normalize_resume_stage(stage: str) -> str:
         allowed = ", ".join(RUN_STAGE_ORDER)
         raise ValueError(f"unsupported resume stage: {stage!r}; expected one of: {allowed}")
     return normalized
+
+
+def _resume_stage_requested(state: RunState, stage_id: str) -> bool:
+    resume = state.get("resume") or {}
+    return resume.get("stage_checkpoint_resume") == stage_id
 
 
 def _validate_resume_artifact(stage_id: str, payload: dict[str, Any]) -> dict[str, Any]:

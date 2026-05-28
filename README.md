@@ -173,7 +173,7 @@ trace resume demo-001 --from physical --in-place --output-root runs
 
 恢复时：
 
-- `--in-place` 模式下，如果 sqlite 存在则从最近的 stage checkpoint 继续（包括中间未完成的 attempt）；
+- `--in-place` 模式下，优先使用 `runs/<run_id>/<stage>/state.sqlite` 从该 stage 子图的最近 checkpoint 继续；如果 stage sqlite 不可用，则回退到外层 `runs/<run_id>/state.sqlite` / RunStorage 路径；
 - `--new-run-id <id>` 模式（默认）下，始终走 `RunStorage` 路径：把上一 run 的 stage 快照拷贝进新 `runs/<new_id>/` 目录后重新跑，并在新目录里建立自己的 sqlite。
 
 ### Escalation 反馈通道
@@ -192,6 +192,7 @@ runs/<run_id>/
   run.json
   events.jsonl
   ground/
+    state.sqlite
     artifact.json
     logical_constraints.json
     physical_constraints.json
@@ -202,6 +203,7 @@ runs/<run_id>/
     retry_history.json
     events.jsonl
   logical/
+    state.sqlite
     artifact.json
     checkpoints.py
     evaluation.json
@@ -211,6 +213,7 @@ runs/<run_id>/
     repair_history.json
     events.jsonl
   physical/
+    state.sqlite
     artifact.json
     checkpoints.py
     evaluation.json
@@ -221,7 +224,7 @@ runs/<run_id>/
     events.jsonl
 ```
 
-`ground/artifact.json` 包含 `node_groups`、`logical_constraints`、`physical_constraints`。
+`ground/artifact.json` 只包含 `node_groups` 和 `constraint_files`；约束正文落在 `ground/logical_constraints.json`、`ground/physical_constraints.json`，并通过 `artifact.constraint_files` 引用。
 
 `logical/artifact.json` 只包含：
 

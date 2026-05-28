@@ -17,7 +17,7 @@ def test_run_storage_writes_debug_friendly_layout(tmp_path):
         stage_id="logical",
         artifact={
             "graph": {"stage": "logical", "nodes": [], "links": []},
-            "constraint_files": {"logical": "logical/constraints.json"},
+            "constraint_files": {"logical": "ground/logical_constraints.json"},
             "checkpoint_files": {"logical": "logical/checkpoints.py"},
         },
         evaluation={"ok": True, "issues": []},
@@ -115,3 +115,16 @@ def test_run_storage_reads_run_state_and_stage_artifacts(tmp_path):
     }
     assert storage.stage_snapshot_exists("run-004", "logical")
     assert not storage.stage_snapshot_exists("run-004", "physical")
+
+
+def test_copy_stage_snapshot_does_not_copy_stage_sqlite(tmp_path):
+    storage = RunStorage(tmp_path / "runs")
+    source = tmp_path / "runs" / "source" / "logical"
+    source.mkdir(parents=True)
+    (source / "artifact.json").write_text("{}", encoding="utf-8")
+    (source / "state.sqlite").write_bytes(b"debug sqlite")
+
+    storage.copy_stage_snapshot(source_run_id="source", target_run_id="target", stage_id="logical")
+
+    assert (tmp_path / "runs" / "target" / "logical" / "artifact.json").exists()
+    assert not (tmp_path / "runs" / "target" / "logical" / "state.sqlite").exists()

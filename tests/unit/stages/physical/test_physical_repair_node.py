@@ -110,7 +110,7 @@ def test_physical_repair_injects_contract_image_catalog_and_logical_topology():
                 "nodes": [{"id": "PLC1", "type": "computer", "label": "PLC1", "ports": [], "image": None, "flavor": None}],
                 "links": [],
             },
-            "constraint_files": {"physical": "physical/constraints.json"},
+            "constraint_files": {"physical": "ground/physical_constraints.json"},
             "checkpoint_files": {"physical": "physical/checkpoints.py"},
         },
         "evaluation_report": {"ok": False, "issues": [{"details": {"issue_kind": "missing_required_node_field"}, "severity": "error"}]},

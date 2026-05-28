@@ -1,6 +1,5 @@
 from trace.runtime.engine import TraceRuntime
-
-import pytest
+from trace.runtime.stage_checkpoint import StageCheckpointUnavailable
 
 
 def _completed_stage(*, artifact=None, stage="logical"):
@@ -85,52 +84,93 @@ def test_resume_uses_sqlite_path_when_in_place(tmp_path, monkeypatch):
     assert final_state.get("status") == "completed"
 
 
-def test_resume_picks_up_from_sqlite_when_present(tmp_path, monkeypatch):
-    """Integration smoke: failed run leaves sqlite; resume re-enters from logical checkpoint."""
+def test_resume_prefers_nested_stage_sqlite_when_in_place(tmp_path, monkeypatch):
     runtime = TraceRuntime(output_root=tmp_path)
-    logical_calls: list[dict] = []
+    calls = {"stage": False, "outer": False}
 
-    def _ground(**kwargs):
-        del kwargs
+    def _stage_resume(**kwargs):
+        calls["stage"] = True
         return {
+            "run_id": kwargs["target_run_id"],
+            "intent": "x",
             "status": "completed",
-            "artifact": {
-                "node_groups": [{"type": "router", "members": ["R1"]}],
-                "constraint_files": {"logical": "ground/logical_constraints.json"},
-            },
-            "evaluation_summary": {"ok": True, "issues": []},
-            "attempts_used": 1,
-            "messages": [],
-            "tool_journal": [],
-            "retry_history": [],
-            "events": [],
-            "support_files": {},
+            "current_stage": None,
+            "artifacts": {},
+            "events": [{"type": "run.completed"}],
         }
 
-    def _logical_fail(**kwargs):
-        del kwargs
-        raise RuntimeError("synthetic failure for resume test")
+    def _outer_resume(**_kwargs):
+        calls["outer"] = True
+        return {"run_id": "outer", "status": "completed"}
 
-    def _logical_ok(**kwargs):
-        logical_calls.append(kwargs)
-        return _completed_stage()
+    monkeypatch.setattr(runtime, "_resume_via_stage_sqlite", _stage_resume, raising=False)
+    monkeypatch.setattr(runtime, "_resume_via_sqlite", _outer_resume)
 
-    monkeypatch.setattr("trace.runtime.engine.run_ground_stage", _ground)
-    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", _logical_fail)
-    runtime.run(intent="x", run_id="resume-base")
+    run_id = "nested-route"
+    run_root = tmp_path / run_id
+    (run_root / "logical").mkdir(parents=True)
+    (run_root / "state.sqlite").write_bytes(b"outer")
+    (run_root / "logical" / "state.sqlite").write_bytes(b"inner")
+    runtime.storage.initialize_run(
+        run_id=run_id,
+        run_payload={"run_id": run_id, "intent": "x", "status": "failed", "current_stage": "logical"},
+    )
 
-    sqlite_path = tmp_path / "resume-base" / "state.sqlite"
-    assert sqlite_path.exists(), "sqlite must exist after a failed run for resume to use it"
+    final_state = runtime.resume(run_id, from_stage="logical", in_place=True)
 
-    monkeypatch.setattr("trace.runtime.engine.run_logical_stage", _logical_ok)
-    monkeypatch.setattr("trace.runtime.engine.run_physical_stage", lambda **kwargs: _completed_stage(stage="physical"))
+    assert calls == {"stage": True, "outer": False}
+    assert final_state.get("status") == "completed"
+
+
+def test_resume_falls_back_to_outer_sqlite_when_nested_stage_sqlite_unavailable(tmp_path, monkeypatch):
+    runtime = TraceRuntime(output_root=tmp_path)
+    calls = {"stage": False, "outer": False}
+
+    def _stage_resume(**_kwargs):
+        calls["stage"] = True
+        raise StageCheckpointUnavailable("synthetic unreadable stage checkpoint")
+
+    def _outer_resume(**kwargs):
+        calls["outer"] = True
+        return {
+            "run_id": kwargs["target_run_id"],
+            "status": "completed",
+            "events": [{"type": "run.completed"}],
+        }
+
+    monkeypatch.setattr(runtime, "_resume_via_stage_sqlite", _stage_resume)
+    monkeypatch.setattr(runtime, "_resume_via_sqlite", _outer_resume)
+
+    run_id = "resume-fallback"
+    run_root = tmp_path / run_id
+    (run_root / "logical").mkdir(parents=True)
+    (run_root / "state.sqlite").write_bytes(b"outer")
+    (run_root / "logical" / "state.sqlite").write_bytes(b"unreadable")
+    runtime.storage.initialize_run(
+        run_id=run_id,
+        run_payload={"run_id": run_id, "intent": "x", "status": "failed", "current_stage": "logical"},
+    )
+
+    final_state = runtime.resume(run_id, from_stage="logical", in_place=True)
+
+    assert calls == {"stage": True, "outer": True}
+    assert final_state["status"] == "completed"
+
+
+def test_stage_sqlite_unavailable_does_not_overwrite_run_state_before_fallback(tmp_path, monkeypatch):
+    runtime = TraceRuntime(output_root=tmp_path)
+    run_id = "resume-stage-unavailable"
+    original_state = {"run_id": run_id, "intent": "x", "status": "failed", "current_stage": "logical"}
+    runtime.storage.initialize_run(run_id=run_id, run_payload=original_state)
+
+    def _unavailable_graph(*_args, **_kwargs):
+        raise StageCheckpointUnavailable("synthetic unreadable stage checkpoint")
+
+    monkeypatch.setattr(runtime, "_build_run_graph", _unavailable_graph)
 
     try:
-        final_state = runtime.resume("resume-base", from_stage="logical", in_place=True)
-    except ValueError:
-        pytest.skip("sqlite checkpoint for logical stage not found in this LangGraph version")
+        runtime._resume_via_stage_sqlite(source_run_id=run_id, target_run_id=run_id, resume_stage="logical")
+    except StageCheckpointUnavailable:
+        pass
 
-    if final_state.get("status") != "completed":
-        pytest.skip("sqlite resume from failed logical checkpoint is environment-dependent")
-
-    assert logical_calls, "resume should re-enter logical stage via sqlite checkpoint"
+    assert runtime.storage.read_run_state(run_id) == original_state

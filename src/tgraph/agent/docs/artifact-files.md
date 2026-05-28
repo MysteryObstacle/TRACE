@@ -5,19 +5,22 @@ TRACE stage artifacts use the same outer shape:
 ```json
 {
   "graph": {"stage": "logical", "nodes": [], "links": []},
-  "constraint_files": {"logical": "logical/constraints.json"},
+  "constraint_files": {"logical": "ground/logical_constraints.json"},
   "checkpoint_files": {"logical": "logical/checkpoints.py"}
 }
 ```
 
+Ground stage writes canonical constraint support files:
+
+- `ground/logical_constraints.json`
+- `ground/physical_constraints.json`
+
 Logical stage writes:
 
-- `logical/constraints.json`
 - `logical/checkpoints.py`
 
 Physical stage writes:
 
-- `physical/constraints.json`
 - `physical/checkpoints.py`
 
 Constraint files are JSON objects keyed by constraint id:

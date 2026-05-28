@@ -35,6 +35,20 @@ def test_mutation_index_seed_zero_falls_back_to_one(tmp_path):
     assert result["path"] == "logical/mutations/attempt_1.py"
 
 
+def test_mutation_index_advances_past_existing_support_files(tmp_path):
+    tools = StageRepairTools(
+        {"graph": _seed(), "constraint_files": {}, "checkpoint_files": {}},
+        support_files={
+            "logical/mutations/attempt_1.py": "def mutate(tgraph):\n    pass\n",
+            "logical/mutations/snapshots/attempt_2.json": "{}",
+        },
+        support_file_root=str(tmp_path),
+        mutation_index_seed=1,
+    )
+    result = tools.write_mutation_file(content="def mutate(tgraph):\n    pass\n")
+    assert result["path"] == "logical/mutations/attempt_3.py"
+
+
 def test_repair_node_passes_seeded_index(monkeypatch):
     captured = {}
 

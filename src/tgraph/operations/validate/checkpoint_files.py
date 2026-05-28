@@ -3,15 +3,18 @@ from __future__ import annotations
 import ast
 import multiprocessing as mp
 from pathlib import Path
-import queue
-import threading
 from typing import Any, Mapping
 
 from pydantic import BaseModel, Field
 
 from tgraph.core.graph import TGraph
-from tgraph.operations._execution_mode import use_inline_execution
-from tgraph.operations._subprocess_runner import read_subprocess_result, terminate_subprocess_worker
+from tgraph.operations._sandbox_runner import (
+    disallowed_imports,
+    guarded_import,
+    parse_source,
+    read_source_file,
+    run_sandbox_worker,
+)
 from tgraph.operations.validate.constraint_files import ConstraintFact
 from tgraph.operations.validate.issues import ValidationIssue, validation_issue
 from tgraph.operations.validate.sandbox import ALLOWED_MODULES, SAFE_BUILTINS
@@ -38,14 +41,13 @@ def execute_checkpoint_file(
     path = Path(checkpoint_path)
     source_path = _source_path(path)
     current = graph if isinstance(graph, TGraph) else TGraph.model_validate(graph)
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    source, read_error = read_source_file(path)
+    if read_error is not None or source is None:
         return CheckpointFileExecutionResult.from_issues(
             [
                 _file_issue(
                     "checkpoint.file.read_error",
-                    f"failed to read checkpoint file: {exc}",
+                    f"failed to read checkpoint file: {read_error}",
                     source_path=source_path,
                 )
             ]
@@ -70,68 +72,34 @@ def execute_checkpoint_file(
         source_path,
         {constraint_id: fact.model_dump(mode="json") for constraint_id, fact in executable_constraints.items()},
     )
-    if use_inline_execution():
-        result_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        worker = threading.Thread(
-            target=_checkpoint_file_worker,
-            args=(result_queue, *worker_args),
-            daemon=True,
-        )
-        worker.start()
-        worker.join(timeout_seconds)
-        if worker.is_alive():
-            return CheckpointFileExecutionResult.from_issues(
-                [
-                    _file_issue(
-                        "checkpoint.execution.timeout",
-                        f"checkpoint file exceeded timeout of {timeout_seconds} seconds",
-                        source_path=source_path,
-                        details={"timeout_seconds": timeout_seconds, "scope": "file"},
-                    )
-                ]
-            )
-        try:
-            payload = result_queue.get_nowait()
-        except queue.Empty:
-            return CheckpointFileExecutionResult.from_issues(
-                [
-                    _file_issue(
-                        "checkpoint.execution.exception",
-                        "checkpoint file exited without a result",
-                        source_path=source_path,
-                        details={"scope": "file"},
-                    )
-                ]
-            )
-    else:
-        context = mp.get_context("spawn")
-        result_queue = context.Queue()
-        worker = context.Process(target=_checkpoint_file_worker, args=(result_queue, *worker_args))
-        worker.start()
-        payload = read_subprocess_result(worker, result_queue, timeout_seconds)
-        if payload is None:
-            if worker.is_alive():
-                terminate_subprocess_worker(worker)
-                return CheckpointFileExecutionResult.from_issues(
-                    [
-                        _file_issue(
-                            "checkpoint.execution.timeout",
-                            f"checkpoint file exceeded timeout of {timeout_seconds} seconds",
-                            source_path=source_path,
-                            details={"timeout_seconds": timeout_seconds, "scope": "file"},
-                        )
-                    ]
+    worker_result = run_sandbox_worker(
+        target=_checkpoint_file_worker,
+        args=worker_args,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = worker_result.payload
+    if worker_result.timed_out:
+        return CheckpointFileExecutionResult.from_issues(
+            [
+                _file_issue(
+                    "checkpoint.execution.timeout",
+                    f"checkpoint file exceeded timeout of {timeout_seconds} seconds",
+                    source_path=source_path,
+                    details={"timeout_seconds": timeout_seconds, "scope": "file"},
                 )
-            return CheckpointFileExecutionResult.from_issues(
-                [
-                    _file_issue(
-                        "checkpoint.execution.exception",
-                        "checkpoint file exited without a result",
-                        source_path=source_path,
-                        details={"scope": "file"},
-                    )
-                ]
-            )
+            ]
+        )
+    if payload is None:
+        return CheckpointFileExecutionResult.from_issues(
+            [
+                _file_issue(
+                    "checkpoint.execution.exception",
+                    "checkpoint file exited without a result",
+                    source_path=source_path,
+                    details={"scope": "file"},
+                )
+            ]
+        )
 
     issues = [ValidationIssue.model_validate(item) for item in payload.get("issues", [])]
     return CheckpointFileExecutionResult.from_issues([*preflight.issues, *issues])
@@ -145,7 +113,9 @@ class _PreflightResult(BaseModel):
 
 def _preflight(source: str, *, constraints: Mapping[str, ConstraintFact], source_path: str) -> _PreflightResult:
     try:
-        tree = ast.parse(source, filename=source_path)
+        tree, syntax_error = parse_source(source, source_path=source_path)
+        if syntax_error is not None or tree is None:
+            raise syntax_error
     except SyntaxError as exc:
         return _PreflightResult(
             hard_stop=True,
@@ -160,8 +130,7 @@ def _preflight(source: str, *, constraints: Mapping[str, ConstraintFact], source
         )
 
     issues: list[ValidationIssue] = []
-    imported_modules = _imported_modules(tree)
-    disallowed = sorted(module for module in imported_modules if module not in ALLOWED_MODULES)
+    disallowed = disallowed_imports(tree, ALLOWED_MODULES)
     if disallowed:
         return _PreflightResult(
             hard_stop=True,
@@ -235,7 +204,7 @@ def _checkpoint_file_worker(
     issues: list[dict[str, Any]] = []
     try:
         globals_dict = {
-            "__builtins__": {**SAFE_BUILTINS, "__import__": _checkpoint_import},
+            "__builtins__": {**SAFE_BUILTINS, "__import__": guarded_import(ALLOWED_MODULES, file_kind="checkpoint")},
         }
         exec(compile(source, source_path, "exec"), globals_dict, globals_dict)  # noqa: S102
         tgraph = TGraphView(graph_payload, references=reference_payloads)
@@ -331,23 +300,6 @@ def _normalize_checkpoint_result(
                 )
             )
     return issues
-
-
-def _checkpoint_import(name: str, globals: dict[str, Any] | None = None, locals: dict[str, Any] | None = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
-    del globals, locals, fromlist, level
-    if name in ALLOWED_MODULES:
-        return ALLOWED_MODULES[name]
-    raise ImportError(f"module '{name}' is not available in checkpoint files")
-
-
-def _imported_modules(tree: ast.AST) -> set[str]:
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module.split(".")[0])
-    return modules
 
 
 def _checkpoint_issue(

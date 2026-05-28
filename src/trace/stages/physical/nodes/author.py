@@ -12,6 +12,7 @@ from trace.stages.physical.state import PhysicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
 from trace.stages.ground.schemas import PHYSICAL_CONSTRAINTS_PATH
 from trace.stages.repair_tools import _FindImagesInput, _GetImageInput
+from trace.stages.stage_results import extract_agent_messages
 from trace.stages.support_files import _FilterParams, filtered_view, write_support_file
 from trace.tools.images.catalog import find_images, get_image
 
@@ -50,7 +51,7 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
     return {
         "author_output": author_tools.artifact_state(),
         "support_files": dict(state.get("support_files") or {}),
-        "messages": _extract_messages(agent_result) or messages,
+        "messages": extract_agent_messages(agent_result) or messages,
         "events": [{"type": "physical.author.completed"}],
     }
 
@@ -286,11 +287,3 @@ def _physical_constraint_ids(state: PhysicalState) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
     return [{"id": constraint_id} for constraint_id in payload]
-
-
-def _extract_messages(agent_result: Any) -> list[dict[str, Any]]:
-    if isinstance(agent_result, dict):
-        messages = agent_result.get("messages")
-        if isinstance(messages, list):
-            return [item for item in messages if isinstance(item, dict) and item.get("role")]
-    return []
