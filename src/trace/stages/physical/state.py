@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from operator import add
+from typing import Annotated, Any, TypedDict
 
 
 class PhysicalState(TypedDict, total=False):
@@ -12,11 +13,10 @@ class PhysicalState(TypedDict, total=False):
     author_output: dict[str, Any]
     draft_artifact: dict[str, Any]
     evaluation_report: dict[str, Any]
-    repair_history: list[dict[str, Any]]
+    repair_history: Annotated[list[dict[str, Any]], add]
     messages: list[dict[str, str]]
-    events: list[dict[str, Any]]
+    events: Annotated[list[dict[str, Any]], add]
     support_files: dict[str, str]
     support_file_root: str
-    next_action: str
     result: dict[str, Any]
     error: dict[str, Any] | None

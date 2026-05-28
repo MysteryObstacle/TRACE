@@ -34,7 +34,7 @@ class SequenceRoleClient:
         self.message_log.append({"role_name": role_name, "messages": messages})
         return self.responses[role_name].pop(0)
 
-    def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+    def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
         self.calls.append(role_name)
         self.message_log.append({"role_name": role_name, "messages": messages})
         response = self.responses[role_name].pop(0)
@@ -428,10 +428,10 @@ def test_trace_runtime_resume_requires_prior_stage_artifacts(tmp_path):
 
 def test_trace_runtime_persists_failed_stage_when_logical_builder_raises(tmp_path):
     class FailingBuilderClient(SequenceRoleClient):
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             if role_name == "logical_builder":
                 raise RuntimeError("builder model failed")
-            return super().invoke_agent(role_name=role_name, messages=messages, tools=tools, max_tool_calls=max_tool_calls)
+            return super().invoke_agent(role_name=role_name, messages=messages, tools=tools, max_react_steps=max_react_steps)
 
     client = FailingBuilderClient(
         {

@@ -6,16 +6,20 @@ from trace.stages.physical.state import PhysicalState
 
 def finalize_node(state: PhysicalState) -> PhysicalState:
     artifact = PhysicalArtifact.model_validate(state["draft_artifact"]).model_dump(mode="json")
-    state["result"] = {
-        "stage_id": "physical",
-        "artifact": artifact,
-        "support_files": state.get("support_files", {}),
-        "memory_delta": {},
-        "attempts_used": state["attempt"],
-        "evaluation_summary": state.get("evaluation_report"),
-        "messages": state.get("messages", []),
-        "tool_journal": [],
-        "repair_history": state.get("repair_history", []),
-        "events": [*state.get("events", []), {"type": "physical.completed"}],
+    prior_events = list(state.get("events", []))
+    completion_event = {"type": "physical.completed"}
+    return {
+        "events": [completion_event],
+        "result": {
+            "stage_id": "physical",
+            "artifact": artifact,
+            "support_files": state.get("support_files", {}),
+            "memory_delta": {},
+            "attempts_used": state["attempt"],
+            "evaluation_summary": state.get("evaluation_report"),
+            "messages": state.get("messages", []),
+            "tool_journal": [],
+            "repair_history": list(state.get("repair_history", [])),
+            "events": [*prior_events, completion_event],
+        },
     }
-    return state

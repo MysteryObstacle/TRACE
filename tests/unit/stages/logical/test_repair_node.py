@@ -32,13 +32,13 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
         def __init__(self):
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append(
                 {
                     "role_name": role_name,
                     "messages": messages,
                     "tool_names": [_tool_name(tool) for tool in tools],
-                    "max_tool_calls": max_tool_calls,
+                    "max_react_steps": max_react_steps,
                 }
             )
             bound = {_tool_name(tool): tool for tool in tools}
@@ -60,7 +60,7 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
             }
 
     client = FakeRoleClient()
-    result = repair_node(state, client)
+    result = _merge_logical_partial(state, repair_node(state, client))
     graph = result["draft_artifact"]["graph"]
 
     assert client.calls[0]["role_name"] == "logical_repair"
@@ -139,7 +139,7 @@ def test_logical_repair_node_injects_file_refs_and_recent_ledger():
         def __init__(self):
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append({"messages": messages, "tool_names": [_tool_name(tool) for tool in tools]})
             return {"messages": [{"role": "assistant", "content": "noop"}]}
 
@@ -182,7 +182,7 @@ def test_logical_repair_node_writes_back_mutated_checkpoint_file():
     }
 
     class FakeRoleClient:
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             bound = {_tool_name(tool): tool for tool in tools}
             _call_tool(
                 bound["write_checkpoint_file"],
@@ -193,7 +193,7 @@ def test_logical_repair_node_writes_back_mutated_checkpoint_file():
             )
             return {"messages": [{"role": "assistant", "content": "checkpoint file repaired"}]}
 
-    result = repair_node(state, FakeRoleClient())
+    result = _merge_logical_partial(state, repair_node(state, FakeRoleClient()))
 
     assert result["support_files"]["logical/checkpoints.py"] == "def check_lc1(tgraph):\n    return []\n"
     assert result["draft_artifact"]["checkpoint_files"] == {"logical": "logical/checkpoints.py"}
@@ -214,3 +214,12 @@ def _call_tool(tool, payload=None):
     if payload is None:
         return tool()
     return tool(**payload)
+
+
+def _merge_logical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged

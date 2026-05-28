@@ -19,7 +19,7 @@ from trace.tools.images.catalog import find_images, get_image
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "author.md"
 DEFAULT_CHECKPOINT_PATH = "physical/checkpoints.py"
 DEFAULT_CONSTRAINT_PATH = PHYSICAL_CONSTRAINTS_PATH
-MAX_TOOL_CALLS = 24
+MAX_REACT_STEPS = 24
 
 
 def author_node(state: PhysicalState, role_client) -> PhysicalState:
@@ -41,16 +41,18 @@ def author_node(state: PhysicalState, role_client) -> PhysicalState:
         role_name="physical_author",
         messages=messages,
         tools=author_tools.as_agent_tools(),
-        max_tool_calls=MAX_TOOL_CALLS,
+        max_react_steps=MAX_REACT_STEPS,
     )
     validation = author_tools.validate_checkpoint_file()
     if not validation["ok"]:
         raise ValueError(f"physical author produced invalid checkpoint file: {validation['issues']}")
 
-    state["author_output"] = author_tools.artifact_state()
-    state["messages"] = _extract_messages(agent_result) or messages
-    state["events"] = [*state.get("events", []), {"type": "physical.author.completed"}]
-    return state
+    return {
+        "author_output": author_tools.artifact_state(),
+        "support_files": dict(state.get("support_files") or {}),
+        "messages": _extract_messages(agent_result) or messages,
+        "events": [{"type": "physical.author.completed"}],
+    }
 
 
 class _WriteCheckpointFileInput(BaseModel):

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import operator
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
 
 from trace.config.settings import TraceSettings, load_settings
 from trace.observability.tracing import TraceObserver
-from trace.runtime.reducers import merge_run_state
 from trace.runtime.role_client import LangChainRoleClient, RoleClient
 from trace.stages.ground import run_ground_stage
 from trace.stages.ground.schemas import GroundArtifact
@@ -37,7 +37,8 @@ class RunState(TypedDict, total=False):
     stage_reports: dict[str, dict[str, Any]]
     attempt_counters: dict[str, int]
     support_files: dict[str, str]
-    events: list[dict[str, Any]]
+    events: Annotated[list[dict[str, Any]], operator.add]
+    escalation_history: Annotated[list[dict[str, Any]], operator.add]
     error: dict[str, Any] | None
     config_snapshot: dict[str, Any]
     resume: dict[str, Any]
@@ -154,7 +155,7 @@ class TraceRuntime:
         graph.add_edge("finalize", END)
         return graph.compile()
 
-    def _run_ground(self, state: RunState) -> RunState:
+    def _run_ground(self, state: RunState) -> dict[str, Any]:
         try:
             with self.observer.stage_run("ground", run_id=state["run_id"]):
                 result = run_ground_stage(
@@ -166,7 +167,7 @@ class TraceRuntime:
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "ground", exc)
 
-    def _run_logical(self, state: RunState) -> RunState:
+    def _run_logical(self, state: RunState) -> dict[str, Any]:
         try:
             with self.observer.stage_run("logical", run_id=state["run_id"]):
                 result = run_logical_stage(
@@ -179,7 +180,7 @@ class TraceRuntime:
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "logical", exc)
 
-    def _run_physical(self, state: RunState) -> RunState:
+    def _run_physical(self, state: RunState) -> dict[str, Any]:
         try:
             with self.observer.stage_run("physical", run_id=state["run_id"]):
                 result = run_physical_stage(
@@ -193,37 +194,32 @@ class TraceRuntime:
         except Exception as exc:  # noqa: BLE001
             return self._merge_stage_exception(state, "physical", exc)
 
-    def _finalize(self, state: RunState) -> RunState:
-        return merge_run_state(
-            state,
-            {
-                "status": "completed",
-                "current_stage": None,
-                "events": [{"type": "run.completed"}],
-            },
-        )
+    def _finalize(self, state: RunState) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "current_stage": None,
+            "events": [{"type": "run.completed"}],
+        }
 
-    def _merge_stage_result(self, state: RunState, stage_id: str, result: dict[str, Any]) -> RunState:
-        updated = merge_run_state(
-            state,
-            {
-                "current_stage": stage_id,
-                "artifacts": {stage_id: result["artifact"]},
-                "stage_reports": {
-                    stage_id: {
-                        "stage_id": stage_id,
-                        "attempts_used": result["attempts_used"],
-                        "evaluation_summary": result["evaluation_summary"],
-                    }
+    def _merge_stage_result(self, state: RunState, stage_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        partial: dict[str, Any] = {
+            "current_stage": stage_id,
+            "artifacts": {**state.get("artifacts", {}), stage_id: result["artifact"]},
+            "stage_reports": {
+                **state.get("stage_reports", {}),
+                stage_id: {
+                    "stage_id": stage_id,
+                    "attempts_used": result["attempts_used"],
+                    "evaluation_summary": result["evaluation_summary"],
                 },
-                "attempt_counters": {stage_id: result["attempts_used"]},
-                "support_files": result.get("support_files", {}),
-                "events": result["events"],
             },
-        )
-        self.storage.write_run_state(run_id=updated["run_id"], run_payload=updated)
+            "attempt_counters": {**state.get("attempt_counters", {}), stage_id: result["attempts_used"]},
+            "support_files": {**state.get("support_files", {}), **result.get("support_files", {})},
+            "events": result["events"],
+        }
+        self.storage.write_run_state(run_id=state["run_id"], run_payload={**state, **partial})
         self.storage.write_stage_snapshot(
-            run_id=updated["run_id"],
+            run_id=state["run_id"],
             stage_id=stage_id,
             artifact=result["artifact"],
             evaluation=result["evaluation_summary"] or {"ok": True, "issues": []},
@@ -235,38 +231,32 @@ class TraceRuntime:
             events=result["events"],
             support_files=result.get("support_files", {}),
         )
-        return updated
+        return partial
 
-    def _merge_stage_exception(self, state: RunState, stage_id: str, exc: Exception) -> RunState:
-        error = {
-            "stage_id": stage_id,
-            "type": type(exc).__name__,
-            "message": str(exc),
+    def _merge_stage_exception(self, state: RunState, stage_id: str, exc: Exception) -> dict[str, Any]:
+        error = {"stage_id": stage_id, "type": type(exc).__name__, "message": str(exc)}
+        partial = {
+            "status": "failed",
+            "current_stage": stage_id,
+            "error": error,
+            "events": [{"type": "run.stage_failed", "stage_id": stage_id, "error": error}],
         }
-        updated = merge_run_state(
-            state,
-            {
-                "status": "failed",
-                "current_stage": stage_id,
-                "error": error,
-                "events": [{"type": "run.stage_failed", "stage_id": stage_id, "error": error}],
-            },
-        )
-        self.storage.write_run_state(run_id=updated["run_id"], run_payload=updated)
+        merged = {**state, **partial}
+        self.storage.write_run_state(run_id=merged["run_id"], run_payload=merged)
         self.storage.write_stage_snapshot(
-            run_id=updated["run_id"],
+            run_id=merged["run_id"],
             stage_id=stage_id,
-            artifact=updated.get("artifacts", {}).get(stage_id, {}),
+            artifact=merged.get("artifacts", {}).get(stage_id, {}),
             evaluation={"ok": False, "passed": False, "issues": [{"message": error["message"], "details": error}]},
-            summary={"attempts_used": updated.get("attempt_counters", {}).get(stage_id, 0), "failed": True},
+            summary={"attempts_used": merged.get("attempt_counters", {}).get(stage_id, 0), "failed": True},
             messages=[],
             tool_journal=[],
             history_name=_stage_history_name(stage_id),
             history_entries=[],
-            events=[{"type": "run.stage_failed", "stage_id": stage_id, "error": error}],
+            events=partial["events"],
             support_files={},
         )
-        return updated
+        return partial
 
     def _load_resume_support_files(self, *, source_run_id: str, from_stage: str) -> dict[str, str]:
         del from_stage

@@ -55,7 +55,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
         def __init__(self) -> None:
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append(
                 {
                     "role_name": role_name,
@@ -75,7 +75,7 @@ def test_physical_builder_uses_agent_mutation_tools_without_working_graph_contex
             return {"messages": [{"role": "assistant", "content": "physical build complete"}]}
 
     client = FakeRoleClient()
-    result = builder_node(state, client)
+    result = _merge_physical_partial(state, builder_node(state, client))
     messages = client.calls[0]["messages"]
     system_content = "\n".join(item["content"] for item in messages if item["role"] == "system")
     human_content = "\n".join(item["content"] for item in messages if item["role"] == "human")
@@ -121,3 +121,12 @@ def _call_tool(tool, payload=None):
     if payload is None:
         return tool()
     return tool(**payload)
+
+
+def _merge_physical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged

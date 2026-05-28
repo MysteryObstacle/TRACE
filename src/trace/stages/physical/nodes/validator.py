@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from langgraph.graph import END
+from langgraph.types import Command
+
 from tgraph import TGraph, validate_graph
 from tgraph.operations.validate import ValidationContext
 
@@ -7,22 +10,23 @@ from trace.stages.physical.state import PhysicalState
 from trace.stages.support_files import support_file_path
 
 
-def validator_node(state: PhysicalState) -> PhysicalState:
+def validator_node(state: PhysicalState) -> Command:
     report = _validate_physical_artifact(
         artifact=state["draft_artifact"],
         logical_graph=state["logical_artifact"]["graph"],
         state=state,
     )
-    state["evaluation_report"] = report
     if report["ok"]:
-        state["next_action"] = "finalize"
-        return state
+        return Command(goto="finalize", update={"evaluation_report": report})
     if state["attempt"] >= state["max_attempts"]:
-        state["error"] = {"message": "physical stage exceeded max attempts", "issues": report["issues"]}
-        state["next_action"] = "failed"
-        return state
-    state["next_action"] = "repair"
-    return state
+        return Command(
+            goto=END,
+            update={
+                "evaluation_report": report,
+                "error": {"message": "physical stage exceeded max attempts", "issues": report["issues"]},
+            },
+        )
+    return Command(goto="repair", update={"evaluation_report": report})
 
 
 def _validate_physical_artifact(

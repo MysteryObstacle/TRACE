@@ -31,7 +31,7 @@ def test_physical_author_node_injects_tgraph_contract() -> None:
         def __init__(self) -> None:
             self.calls = []
 
-        def invoke_agent(self, *, role_name, messages, tools, max_tool_calls=12):
+        def invoke_agent(self, *, role_name, messages, tools, max_react_steps=12):
             self.calls.append({"role_name": role_name, "messages": messages, "tool_names": [_tool_name(tool) for tool in tools]})
             bound = {_tool_name(tool): tool for tool in tools}
             _call_tool(
@@ -42,7 +42,7 @@ def test_physical_author_node_injects_tgraph_contract() -> None:
             return {"messages": [{"role": "assistant", "content": "done"}]}
 
     client = FakeRoleClient()
-    result = author_node(state, client)
+    result = _merge_physical_partial(state, author_node(state, client))
     messages = client.calls[0]["messages"]
     system_content = messages[1]["content"]
     human_content = messages[2]["content"]
@@ -67,3 +67,12 @@ def _call_tool(tool, payload=None):
     if hasattr(tool, "invoke"):
         return tool.invoke(payload or {})
     return tool(**(payload or {}))
+
+
+def _merge_physical_partial(state: dict, partial: dict) -> dict:
+    merged = {**state, **partial}
+    if "repair_history" in partial:
+        merged["repair_history"] = list(state.get("repair_history", [])) + list(partial["repair_history"])
+    if "events" in partial:
+        merged["events"] = list(state.get("events", [])) + list(partial["events"])
+    return merged
