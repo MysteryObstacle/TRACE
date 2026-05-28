@@ -83,6 +83,8 @@ def test_logical_repair_node_uses_mutation_file_tools_and_writes_back_graph(tmp_
     assert result["repair_history"][-1]["attempted_actions"][0]["tool"] == "write_mutation_file"
     assert result["repair_history"][-1]["attempted_actions"][1]["tool"] == "execute_mutation_file"
     assert result["repair_history"][-1]["failed_actions"] == []
+    assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
+    assert result["repair_history"][-1]["produced_files"][0]["path"] == "logical/mutations/attempt_1.py"
     assert "logical/mutations/attempt_1.py" in result["support_files"]
 
 

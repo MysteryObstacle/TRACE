@@ -23,6 +23,7 @@ def builder_node(state: PhysicalState, role_client) -> PhysicalState:
         support_files=state.get("support_files", {}),
         support_file_root=state.get("support_file_root"),
         logical_reference_graph=state["logical_artifact"]["graph"],
+        mutation_index_seed=1,
     )
     messages = build_messages(
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),

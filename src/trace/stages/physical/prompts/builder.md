@@ -25,6 +25,14 @@ def mutate(tgraph):
 - Do not use patch tools or legacy inline checkpoint fields.
 - Use stage-local files only: `physical/constraints.json`, `physical/checkpoints.py`, and `physical/mutations/build.py`.
 
+## Mutation Strategy
+
+First inspect the current graph state. Then write only the `ensure_*` / `set_*` calls that change something — skip operations whose target state already matches.
+
+Stay aligned with the prepare-seeded node inventory: every physical node was already created during the prepare phase. Your job is to set `image` and `flavor` on those nodes; do not invent new nodes or rewrite the inventory.
+
+If this is not the first attempt within this stage run, call `inspect_graph(view="diff", against="previous_attempt")` before authoring.
+
 ## Switch Coverage
 
 Use `find_images(node_type='switch')` to retrieve the switch image and default_flavor, then iterate every switch node when authoring mutation calls. Do not skip any switch node.

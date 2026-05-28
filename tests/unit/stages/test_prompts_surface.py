@@ -78,3 +78,25 @@ def test_physical_builder_prompt_hints_switch_iteration():
     text = (PROMPT_ROOT / "physical" / "prompts" / "builder.md").read_text(encoding="utf-8")
     assert "find_images(node_type='switch')" in text or 'find_images(node_type="switch")' in text
     assert "do not skip" in text.lower() or "every switch" in text.lower()
+
+
+def test_logical_builder_prompt_uses_incremental_guidance():
+    text = (PROMPT_ROOT / "logical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "First inspect the current graph state" in text or "inspect the current graph" in text.lower()
+    assert "incremental" in text.lower() or "only the" in text.lower()
+
+
+def test_physical_builder_prompt_uses_incremental_guidance():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "builder.md").read_text(encoding="utf-8")
+    assert "First inspect the current graph state" in text or "inspect the current graph" in text.lower()
+    assert "prepare" in text.lower() and "inventory" in text.lower()
+
+
+def test_logical_repair_prompt_mentions_diff_against_previous_attempt():
+    text = (PROMPT_ROOT / "logical" / "prompts" / "repair.md").read_text(encoding="utf-8")
+    assert "against=" in text or "previous_attempt" in text
+
+
+def test_physical_repair_prompt_mentions_diff_against_previous_attempt():
+    text = (PROMPT_ROOT / "physical" / "prompts" / "repair.md").read_text(encoding="utf-8")
+    assert "against=" in text or "previous_attempt" in text

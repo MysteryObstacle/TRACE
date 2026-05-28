@@ -85,6 +85,8 @@ def test_physical_repair_node_uses_mutation_file_tools_and_writes_back_artifact(
     assert result["messages"][-1]["content"] == "physical repair complete"
     assert result["repair_history"][-1]["attempted_actions"][0]["tool"] == "write_mutation_file"
     assert result["repair_history"][-1]["attempted_actions"][1]["tool"] == "execute_mutation_file"
+    assert result["repair_history"][-1]["produced_files"][0]["file_kind"] == "mutation"
+    assert result["repair_history"][-1]["produced_files"][0]["path"] == "physical/mutations/attempt_1.py"
 
 
 def test_physical_repair_injects_contract_image_catalog_and_logical_topology():

@@ -23,4 +23,10 @@ def mutate(tgraph):
 - Do not invent unsupported IR fields such as `zone`, `firewall_rules`, `software`, or `packages`. `segment` is a parameter of `ensure_interface` pointing to a neighboring switch node id — pass an existing node id.
 - Use stage-local files only: `logical/constraints.json`, `logical/checkpoints.py`, and `logical/mutations/build.py`.
 
+## Mutation Strategy
+
+First inspect the current graph state. Then write only the `ensure_*` / `set_*` calls that change something — skip operations whose target state already matches. The `TGraphEditor` operations are idempotent, but writing redundant calls wastes context.
+
+If this is not the first attempt within this stage run, call `inspect_graph(view="diff", against="previous_attempt")` before authoring to see what changed since the last successful mutation.
+
 Final message MUST be a one-sentence action summary; do not restate the artifact or repeat code.

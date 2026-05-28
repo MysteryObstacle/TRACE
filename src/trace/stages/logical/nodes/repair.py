@@ -6,7 +6,7 @@ from typing import Any
 
 from trace.stages.logical.state import LogicalState
 from trace.stages.prompt_contracts import load_tgraph_contract_for
-from trace.stages.repair_tools import StageRepairTools
+from trace.stages.repair_tools import StageRepairTools, _derive_produced_files
 
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "repair.md"
@@ -20,6 +20,7 @@ def repair_node(state: LogicalState, role_client) -> LogicalState:
         state["draft_artifact"],
         support_files=state.get("support_files", {}),
         support_file_root=state.get("support_file_root"),
+        mutation_index_seed=len(prior_ledger) + 1,
     )
     messages = _build_repair_messages(
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8").strip(),
@@ -116,6 +117,7 @@ def _summarize_recent_repair_ledger(repair_history: list[dict[str, Any]]) -> lis
                 "new_issue_kinds": item.get("new_issue_kinds", []),
                 "attempted_actions": item.get("attempted_actions", []),
                 "failed_actions": item.get("failed_actions", []),
+                "produced_files": item.get("produced_files", []),
             }
         )
     return summary
@@ -143,6 +145,7 @@ def _build_repair_ledger_entry(
         "new_issue_kinds": sorted(after_set - before_set),
         "attempted_actions": attempted_actions,
         "failed_actions": failed_actions,
+        "produced_files": _derive_produced_files(attempted_actions),
     }
 
 
