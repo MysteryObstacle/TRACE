@@ -11,7 +11,7 @@ from tgraph.core import (
     ensure_stage,
     normalize_graph,
 )
-from tgraph.io import dump_tgraph, load_tgraph
+from tgraph.io import dump_tgraph, load_tgraph, render_mermaid, write_diagram
 from tgraph.operations.inspect import inspect_graph
 from tgraph.operations.init import init_logical_skeleton, init_physical_skeleton
 from tgraph.operations.validate import validate_document, validate_graph
@@ -35,6 +35,8 @@ __all__ = [
     "init_physical_skeleton",
     "load_tgraph",
     "normalize_graph",
+    "render_mermaid",
+    "write_diagram",
     "validate_document",
     "validate_graph",
 ]

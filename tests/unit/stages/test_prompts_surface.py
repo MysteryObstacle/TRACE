@@ -74,10 +74,10 @@ def test_logical_builder_prompt_does_not_forbid_segment_keyword():
     assert "Do not invent unsupported IR fields such as `segment`" not in text
 
 
-def test_physical_builder_prompt_hints_switch_iteration():
+def test_physical_builder_prompt_forbids_catalog_inside_mutation():
     text = (PROMPT_ROOT / "physical" / "prompts" / "builder.md").read_text(encoding="utf-8")
-    assert "find_images(node_type='switch')" in text or 'find_images(node_type="switch")' in text
-    assert "do not skip" in text.lower() or "every switch" in text.lower()
+    assert "not callable inside `mutate(tgraph)`" in text or "never inside" in text.lower() or "Forbidden in mutation" in text
+    assert "set_node_image" in text
 
 
 def test_logical_builder_prompt_uses_incremental_guidance():

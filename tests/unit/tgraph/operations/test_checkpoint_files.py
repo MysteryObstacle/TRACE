@@ -120,6 +120,7 @@ def check_lc1(tgraph):
 
     assert _issue_kinds(result) == ["checkpoint.return.invalid"]
     assert result.issues[0].details["constraint_id"] == "lc1"
+    assert result.issues[0].details["repair_target"] == "checkpoint"
 
 
 def test_checkpoint_file_timeout_is_file_scoped(tmp_path) -> None:

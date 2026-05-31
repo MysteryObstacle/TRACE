@@ -1,0 +1,514 @@
+{
+  "stage": "physical",
+  "nodes": [
+    {
+      "id": "R_CORE",
+      "type": "router",
+      "label": "R_CORE",
+      "ports": [
+        {
+          "id": "_SW_CORE_BRANCH-1",
+          "ip": "10.0.0.9",
+          "cidr": "10.0.0.8/30"
+        },
+        {
+          "id": "_SW_CORE_FW-1",
+          "ip": "10.0.0.1",
+          "cidr": "10.0.0.0/30"
+        },
+        {
+          "id": "_SW_DMZ-1",
+          "ip": "10.10.10.1",
+          "cidr": "10.10.10.0/24"
+        },
+        {
+          "id": "_SW_MGMT-1",
+          "ip": "10.10.40.1",
+          "cidr": "10.10.40.0/24"
+        },
+        {
+          "id": "_SW_OFFICE-1",
+          "ip": "10.10.20.1",
+          "cidr": "10.10.20.0/24"
+        },
+        {
+          "id": "_SW_OT-1",
+          "ip": "10.10.30.1",
+          "cidr": "10.10.30.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "R_BRANCH",
+      "type": "router",
+      "label": "R_BRANCH",
+      "ports": [
+        {
+          "id": "_SW_BRANCH-1",
+          "ip": "10.20.20.1",
+          "cidr": "10.20.20.0/24"
+        },
+        {
+          "id": "_SW_CORE_BRANCH-1",
+          "ip": "10.0.0.10",
+          "cidr": "10.0.0.8/30"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_DMZ",
+      "type": "switch",
+      "label": "SW_DMZ",
+      "ports": [
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.10.10.0/24"
+        },
+        {
+          "id": "_WEB-1",
+          "ip": "",
+          "cidr": "10.10.10.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_OFFICE",
+      "type": "switch",
+      "label": "SW_OFFICE",
+      "ports": [
+        {
+          "id": "_PC1-1",
+          "ip": "",
+          "cidr": "10.10.20.0/24"
+        },
+        {
+          "id": "_PC2-1",
+          "ip": "",
+          "cidr": "10.10.20.0/24"
+        },
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.10.20.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_OT",
+      "type": "switch",
+      "label": "SW_OT",
+      "ports": [
+        {
+          "id": "_PLC1-1",
+          "ip": "",
+          "cidr": "10.10.30.0/24"
+        },
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.10.30.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_MGMT",
+      "type": "switch",
+      "label": "SW_MGMT",
+      "ports": [
+        {
+          "id": "_ADMIN-1",
+          "ip": "",
+          "cidr": "10.10.40.0/24"
+        },
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.10.40.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_CORE_FW",
+      "type": "switch",
+      "label": "SW_CORE_FW",
+      "ports": [
+        {
+          "id": "_FIREWALL-1",
+          "ip": "",
+          "cidr": "10.0.0.0/30"
+        },
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.0.0.0/30"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_FW_INET",
+      "type": "switch",
+      "label": "SW_FW_INET",
+      "ports": [
+        {
+          "id": "_FIREWALL-1",
+          "ip": "",
+          "cidr": "10.0.0.4/30"
+        },
+        {
+          "id": "_INTERNET-1",
+          "ip": "",
+          "cidr": "10.0.0.4/30"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_CORE_BRANCH",
+      "type": "switch",
+      "label": "SW_CORE_BRANCH",
+      "ports": [
+        {
+          "id": "_R_BRANCH-1",
+          "ip": "",
+          "cidr": "10.0.0.8/30"
+        },
+        {
+          "id": "_R_CORE-1",
+          "ip": "",
+          "cidr": "10.0.0.8/30"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "SW_BRANCH",
+      "type": "switch",
+      "label": "SW_BRANCH",
+      "ports": [
+        {
+          "id": "_BPC1-1",
+          "ip": "",
+          "cidr": "10.20.20.0/24"
+        },
+        {
+          "id": "_R_BRANCH-1",
+          "ip": "",
+          "cidr": "10.20.20.0/24"
+        }
+      ],
+      "image": null,
+      "flavor": null
+    },
+    {
+      "id": "WEB",
+      "type": "computer",
+      "label": "WEB",
+      "ports": [
+        {
+          "id": "_SW_DMZ-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "PC1",
+      "type": "computer",
+      "label": "PC1",
+      "ports": [
+        {
+          "id": "_SW_OFFICE-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "PC2",
+      "type": "computer",
+      "label": "PC2",
+      "ports": [
+        {
+          "id": "_SW_OFFICE-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "PLC1",
+      "type": "computer",
+      "label": "PLC1",
+      "ports": [
+        {
+          "id": "_SW_OT-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "ADMIN",
+      "type": "computer",
+      "label": "ADMIN",
+      "ports": [
+        {
+          "id": "_SW_MGMT-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "BPC1",
+      "type": "computer",
+      "label": "BPC1",
+      "ports": [
+        {
+          "id": "_SW_BRANCH-1",
+          "ip": "",
+          "cidr": ""
+        }
+      ],
+      "image": {
+        "id": "ubuntu_22",
+        "name": "Ubuntu 22.04 LTS Cloud"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "FIREWALL",
+      "type": "computer",
+      "label": "FIREWALL",
+      "ports": [
+        {
+          "id": "_SW_CORE_FW-1",
+          "ip": "10.0.0.2",
+          "cidr": "10.0.0.0/30"
+        },
+        {
+          "id": "_SW_FW_INET-1",
+          "ip": "10.0.0.5",
+          "cidr": "10.0.0.4/30"
+        }
+      ],
+      "image": {
+        "id": "opnsense",
+        "name": "opnsense"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    },
+    {
+      "id": "INTERNET",
+      "type": "computer",
+      "label": "INTERNET",
+      "ports": [
+        {
+          "id": "_SW_FW_INET-1",
+          "ip": "10.0.0.6",
+          "cidr": "10.0.0.4/30"
+        }
+      ],
+      "image": {
+        "id": "linux_internet_gateway",
+        "name": "linux_internet_gateway"
+      },
+      "flavor": {
+        "vcpu": 2,
+        "ram": 2048,
+        "disk": 20
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "ADMIN-SW_MGMT-1",
+      "from_port": "_SW_MGMT-1",
+      "to_port": "_ADMIN-1",
+      "from_node": "ADMIN",
+      "to_node": "SW_MGMT"
+    },
+    {
+      "id": "BPC1-SW_BRANCH-1",
+      "from_port": "_BPC1-1",
+      "to_port": "_SW_BRANCH-1",
+      "from_node": "SW_BRANCH",
+      "to_node": "BPC1"
+    },
+    {
+      "id": "FIREWALL-SW_CORE_FW-1",
+      "from_port": "_FIREWALL-1",
+      "to_port": "_SW_CORE_FW-1",
+      "from_node": "SW_CORE_FW",
+      "to_node": "FIREWALL"
+    },
+    {
+      "id": "FIREWALL-SW_FW_INET-1",
+      "from_port": "_SW_FW_INET-1",
+      "to_port": "_FIREWALL-1",
+      "from_node": "FIREWALL",
+      "to_node": "SW_FW_INET"
+    },
+    {
+      "id": "INTERNET-SW_FW_INET-1",
+      "from_port": "_INTERNET-1",
+      "to_port": "_SW_FW_INET-1",
+      "from_node": "SW_FW_INET",
+      "to_node": "INTERNET"
+    },
+    {
+      "id": "PC1-SW_OFFICE-1",
+      "from_port": "_SW_OFFICE-1",
+      "to_port": "_PC1-1",
+      "from_node": "PC1",
+      "to_node": "SW_OFFICE"
+    },
+    {
+      "id": "PC2-SW_OFFICE-1",
+      "from_port": "_SW_OFFICE-1",
+      "to_port": "_PC2-1",
+      "from_node": "PC2",
+      "to_node": "SW_OFFICE"
+    },
+    {
+      "id": "PLC1-SW_OT-1",
+      "from_port": "_SW_OT-1",
+      "to_port": "_PLC1-1",
+      "from_node": "PLC1",
+      "to_node": "SW_OT"
+    },
+    {
+      "id": "R_BRANCH-SW_BRANCH-1",
+      "from_port": "_SW_BRANCH-1",
+      "to_port": "_R_BRANCH-1",
+      "from_node": "R_BRANCH",
+      "to_node": "SW_BRANCH"
+    },
+    {
+      "id": "R_BRANCH-SW_CORE_BRANCH-1",
+      "from_port": "_R_BRANCH-1",
+      "to_port": "_SW_CORE_BRANCH-1",
+      "from_node": "SW_CORE_BRANCH",
+      "to_node": "R_BRANCH"
+    },
+    {
+      "id": "R_CORE-SW_CORE_BRANCH-1",
+      "from_port": "_SW_CORE_BRANCH-1",
+      "to_port": "_R_CORE-1",
+      "from_node": "R_CORE",
+      "to_node": "SW_CORE_BRANCH"
+    },
+    {
+      "id": "R_CORE-SW_CORE_FW-1",
+      "from_port": "_SW_CORE_FW-1",
+      "to_port": "_R_CORE-1",
+      "from_node": "R_CORE",
+      "to_node": "SW_CORE_FW"
+    },
+    {
+      "id": "R_CORE-SW_DMZ-1",
+      "from_port": "_R_CORE-1",
+      "to_port": "_SW_DMZ-1",
+      "from_node": "SW_DMZ",
+      "to_node": "R_CORE"
+    },
+    {
+      "id": "R_CORE-SW_MGMT-1",
+      "from_port": "_R_CORE-1",
+      "to_port": "_SW_MGMT-1",
+      "from_node": "SW_MGMT",
+      "to_node": "R_CORE"
+    },
+    {
+      "id": "R_CORE-SW_OFFICE-1",
+      "from_port": "_R_CORE-1",
+      "to_port": "_SW_OFFICE-1",
+      "from_node": "SW_OFFICE",
+      "to_node": "R_CORE"
+    },
+    {
+      "id": "R_CORE-SW_OT-1",
+      "from_port": "_R_CORE-1",
+      "to_port": "_SW_OT-1",
+      "from_node": "SW_OT",
+      "to_node": "R_CORE"
+    },
+    {
+      "id": "SW_DMZ-WEB-1",
+      "from_port": "_SW_DMZ-1",
+      "to_port": "_WEB-1",
+      "from_node": "WEB",
+      "to_node": "SW_DMZ"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ Repair the stage artifact shape:
 - `constraint_files`
 - `checkpoint_files`
 
-Use the loop: inspect the graph, write a mutation file, execute it transactionally, validate, then repeat.
+Inspect when needed, write one mutation or checkpoint fix, execute or save it, then stop. The validator node runs full validation; do not validate or loop inside repair.
 
 If the problem is an intent mismatch rather than a graph-structure mismatch, update the caller-owned checkpoint file instead of inventing new graph fields.
 

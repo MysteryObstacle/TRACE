@@ -313,6 +313,8 @@ def _checkpoint_issue(
 ) -> ValidationIssue:
     details: dict[str, Any] = {}
     _enrich_details(details, source_path=source_path, constraint_id=constraint_id, fact=fact, function_name=function_name)
+    if issue_kind == "checkpoint.return.invalid":
+        details.setdefault("repair_target", "checkpoint")
     return validation_issue(
         issue_kind,
         message,

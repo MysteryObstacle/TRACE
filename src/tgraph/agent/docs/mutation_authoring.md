@@ -9,5 +9,6 @@ def mutate(tgraph):
     return tgraph
 ```
 
-Runtime executes the script against a graph copy and commits only if validation passes.
-On failure the original graph is unchanged and repair receives structured issues.
+Runtime executes the script against a graph copy and applies operations transactionally.
+By default `execute_mutation_file` does not run checkpoint validation; the validator node does.
+On failure the graph is unchanged and the agent corrects the mutation file using editor docs.

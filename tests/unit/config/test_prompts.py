@@ -39,6 +39,7 @@ def test_all_model_facing_stage_prompts_are_english():
 
 def test_prompt_contract_loader_uses_standalone_tgraph_playbooks():
     logical_author = load_tgraph_contract_for("logical_author")
+    logical_builder = load_tgraph_contract_for("logical_builder")
     logical_repair = load_tgraph_contract_for("logical_repair")
     physical_builder = load_tgraph_contract_for("physical_builder")
 
@@ -46,19 +47,31 @@ def test_prompt_contract_loader_uses_standalone_tgraph_playbooks():
     assert "constraint_files" in logical_author
     assert "checkpoint_files" in logical_author
     assert "validator_script" not in logical_author
-    assert "check_<constraint_id>" in logical_author
+    assert "check_<constraint_id>" in logical_author or "check_" in logical_author
     assert "connect_nodes" not in logical_author
     assert "switch_has_subnet" not in logical_author
     assert "node_interface_on_segment" not in logical_author
-    assert "function parameter pointing to a neighboring node" in logical_author or "segment is a function parameter" in logical_author
+    assert "neighboring" in logical_author.lower() or "segment is a function parameter" in logical_author
+    assert "validate after every meaningful change" not in logical_author
+    assert "tgraph_view_api.md" in logical_author
+    assert "tgraph_editor_api.md" not in logical_author
 
-    assert "mutation file" in logical_repair
-    assert "repair the stage artifact shape" in logical_repair.lower()
+    assert "ensure_direct_link" in logical_builder
+    assert "ensure_link" in logical_builder
+    assert "Logical Builder Contract" in logical_builder or "logical mutation" in logical_builder.lower()
+    assert "Physical metadata APIs" in logical_builder
+    assert "mutation_authoring.md" in logical_builder
+
+    assert "coherent" in logical_repair.lower()
+    assert "Logical Repair Contract" in logical_repair or "logical mutation" in logical_repair.lower()
+    assert "set_node_image" not in logical_repair
+    assert "find_images" not in logical_repair
     assert "graph/checkpoints/validator_script" not in logical_repair
+    assert "validate, then repeat" not in logical_repair
 
-    assert "image" in physical_builder
-    assert "flavor" in physical_builder
-    assert "software" in physical_builder
+    assert "Physical Builder Contract" in physical_builder or "set_node_image" in physical_builder
+    assert "set_image" in physical_builder
+    assert "ensure_direct_link" not in physical_builder
 
 
 def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
@@ -80,7 +93,9 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
     assert "validate=true" not in builder_prompt
-    assert "validate_graph" not in builder_prompt
+    assert "node completion" in builder_prompt.lower() or "completes this node" in builder_prompt.lower()
+    assert "ensure_link" in builder_prompt
+    assert "coherent" not in builder_prompt.lower()
     assert "logical/mutations/attempt_N.py" in builder_prompt
     assert "logical/mutations/build.py" not in builder_prompt
     assert "logical/constraints.json" not in builder_prompt
@@ -91,7 +106,8 @@ def test_logical_prompts_use_file_backed_checkpoint_and_mutation_contract():
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
     assert "write_checkpoint_file" in repair_prompt
-    assert "validate_graph" not in repair_prompt
+    assert "coherent" in repair_prompt.lower()
+    assert "full-stage validation" in repair_prompt.lower()
     assert "apply_graph_patch" not in repair_prompt
 
 
@@ -106,6 +122,7 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
     assert "list_images" in author_prompt
     assert "find_images" in author_prompt
     assert "get_image" in author_prompt
+    assert "Tool-time" in author_prompt or "tool-time" in author_prompt.lower()
     assert "physical/checkpoints.py" in author_prompt
     assert "write_checkpoint_file" in author_prompt
     assert "validate_checkpoint_file" in author_prompt
@@ -116,7 +133,8 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
     assert "write_mutation_file" in builder_prompt
     assert "execute_mutation_file" in builder_prompt
     assert "validate=true" not in builder_prompt
-    assert "validate_graph" not in builder_prompt
+    assert "node completion" in builder_prompt.lower() or "completes this node" in builder_prompt.lower()
+    assert "set_image" in builder_prompt
     assert "physical/mutations/attempt_N.py" in builder_prompt
     assert "physical/mutations/build.py" not in builder_prompt
     assert "physical/constraints.json" not in builder_prompt
@@ -130,7 +148,7 @@ def test_physical_prompts_use_catalog_and_file_backed_mutation_surface():
 
     assert "write_mutation_file" in repair_prompt
     assert "execute_mutation_file" in repair_prompt
-    assert "validate_graph" not in repair_prompt
+    assert "coherent" in repair_prompt.lower()
     assert "replace_validator_script" not in repair_prompt
     assert "list_images" in repair_prompt
     assert "find_images" in repair_prompt

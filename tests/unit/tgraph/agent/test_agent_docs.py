@@ -39,6 +39,15 @@ def test_mutation_authoring_mentions_ensure_direct_link():
     assert "ensure_direct_link" in text
 
 
+def test_tgraph_view_api_uses_canonical_names_only():
+    text = (DOCS / "tgraph_view_api.md").read_text(encoding="utf-8")
+    assert "tgraph.ports(" in text
+    assert "tgraph.ip_in_cidr(" in text
+    assert "get_ports(" not in text.split("Forbidden")[0]
+    assert "ip_in_subnet(" not in text.split("Forbidden")[0]
+    assert "Forbidden legacy names" in text
+
+
 def test_agent_docs_use_canonical_ground_constraint_paths():
     docs = "\n\n".join(path.read_text(encoding="utf-8") for path in DOCS.glob("*.md"))
     assert "ground/logical_constraints.json" in docs

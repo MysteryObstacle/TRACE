@@ -1,0 +1,84 @@
+flowchart TB
+  classDef router fill:#dbeafe,stroke:#2563eb,stroke-width:2px
+  classDef switch fill:#fef3c7,stroke:#d97706,stroke-width:1.5px
+  classDef computer fill:#dcfce7,stroke:#16a34a,stroke-width:1px
+
+  subgraph subnet_SW_BRANCH["SW_BRANCH (10.20.20.0/24)"]
+    BPC1[BPC1]
+    SW_BRANCH[SW_BRANCH]
+  end
+
+  subgraph subnet_SW_CORE_BRANCH["SW_CORE_BRANCH (10.0.0.8/30)"]
+    SW_CORE_BRANCH[SW_CORE_BRANCH]
+  end
+
+  subgraph subnet_SW_CORE_FW["SW_CORE_FW (10.0.0.0/30)"]
+    FIREWALL[FIREWALL]
+    SW_CORE_FW[SW_CORE_FW]
+  end
+
+  subgraph subnet_SW_DMZ["SW_DMZ (10.10.10.0/24)"]
+    SW_DMZ[SW_DMZ]
+    WEB[WEB]
+  end
+
+  subgraph subnet_SW_FW_INET["SW_FW_INET (10.0.0.4/30)"]
+    INTERNET[INTERNET]
+    SW_FW_INET[SW_FW_INET]
+  end
+
+  subgraph subnet_SW_MGMT["SW_MGMT (10.10.40.0/24)"]
+    ADMIN[ADMIN]
+    SW_MGMT[SW_MGMT]
+  end
+
+  subgraph subnet_SW_OFFICE["SW_OFFICE (10.10.20.0/24)"]
+    PC1[PC1]
+    PC2[PC2]
+    SW_OFFICE[SW_OFFICE]
+  end
+
+  subgraph subnet_SW_OT["SW_OT (10.10.30.0/24)"]
+    PLC1[PLC1]
+    SW_OT[SW_OT]
+  end
+
+  R_BRANCH[R_BRANCH]
+  R_CORE[R_CORE]
+
+  ADMIN --- SW_MGMT
+  SW_BRANCH --- BPC1
+  SW_CORE_FW --- FIREWALL
+  FIREWALL --- SW_FW_INET
+  SW_FW_INET --- INTERNET
+  PC1 --- SW_OFFICE
+  PC2 --- SW_OFFICE
+  PLC1 --- SW_OT
+  R_BRANCH --- SW_BRANCH
+  SW_CORE_BRANCH --- R_BRANCH
+  R_CORE --- SW_CORE_BRANCH
+  R_CORE --- SW_CORE_FW
+  SW_DMZ --- R_CORE
+  SW_MGMT --- R_CORE
+  SW_OFFICE --- R_CORE
+  SW_OT --- R_CORE
+  WEB --- SW_DMZ
+
+  class R_CORE router
+  class R_BRANCH router
+  class SW_DMZ switch
+  class SW_OFFICE switch
+  class SW_OT switch
+  class SW_MGMT switch
+  class SW_CORE_FW switch
+  class SW_FW_INET switch
+  class SW_CORE_BRANCH switch
+  class SW_BRANCH switch
+  class WEB computer
+  class PC1 computer
+  class PC2 computer
+  class PLC1 computer
+  class ADMIN computer
+  class BPC1 computer
+  class FIREWALL computer
+  class INTERNET computer

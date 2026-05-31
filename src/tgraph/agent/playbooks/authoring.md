@@ -6,7 +6,7 @@ Create or update a stage artifact with:
 - `constraint_files`
 - `checkpoint_files`
 
-Use inspect for current context, controlled mutation for graph edits, and validate after every meaningful change.
+Use checkpoint files for intent that does not belong in the graph shape. Inspect constraints and checkpoints with read-only support files. Graph edits belong in builder/repair nodes via mutation files; validate coverage with `validate_checkpoint_file` in author nodes, and run full stage validation in validator nodes only.
 
 Use checkpoint files for intent checks that do not belong in the graph shape itself. Each function is named `check_<constraint_id>(tgraph)` and should normally call one of the formal `tgraph.check_*` APIs.
 
